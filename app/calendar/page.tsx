@@ -220,6 +220,7 @@ setAllDay(event.all_day);
 setStartTime(
   date
     .toLocaleTimeString("ko-KR", {
+      timeZone: "Asia/Seoul",
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
@@ -228,15 +229,16 @@ setStartTime(
 );
 
 if (event.end_at) {
-  setEndTime(
-    new Date(event.end_at)
-      .toLocaleTimeString("ko-KR", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      })
-      .slice(0, 5)
-  );
+setEndTime(
+  new Date(event.end_at)
+    .toLocaleTimeString("ko-KR", {
+      timeZone: "Asia/Seoul",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    })
+    .slice(0, 5)
+);
 }
 
 setSelectedDate(date);
@@ -260,12 +262,12 @@ if (!myUserId) {
 const date = dateToInput(selectedDate);
 
 const startAt = allDay
-  ? date + "T00:00:00"
-  : date + "T" + startTime + ":00";
+  ? `${date}T00:00:00+09:00`
+  : `${date}T${startTime}:00+09:00`;
 
 const endAt = allDay
-  ? date + "T23:59:59"
-  : date + "T" + endTime + ":00";
+  ? `${date}T23:59:59+09:00`
+  : `${date}T${endTime}:00+09:00`;
 
 if (editingEvent) {
   const { error } = await supabase
