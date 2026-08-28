@@ -269,13 +269,18 @@ if (!myUserId) {
 
 const date = dateToInput(selectedDate);
 
+function koreaToUTC(dateString: string, timeString: string) {
+  const local = new Date(`${dateString}T${timeString}:00+09:00`);
+  return local.toISOString();
+}
+
 const startAt = allDay
-  ? seoulTimeToUTC(date, "00:00")
-  : seoulTimeToUTC(date, startTime);
+  ? koreaToUTC(date, "00:00")
+  : koreaToUTC(date, startTime);
 
 const endAt = allDay
-  ? seoulTimeToUTC(date, "23:59")
-  : seoulTimeToUTC(date, endTime);
+  ? koreaToUTC(date, "23:59")
+  : koreaToUTC(date, endTime);
 
 if (editingEvent) {
   const { error } = await supabase
