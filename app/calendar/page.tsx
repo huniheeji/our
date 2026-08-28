@@ -262,12 +262,12 @@ if (!myUserId) {
 const date = dateToInput(selectedDate);
 
 const startAt = allDay
-  ? `${date}T00:00:00+09:00`
-  : `${date}T${startTime}:00+09:00`;
+  ? `${date}T00:00:00`
+  : `${date}T${startTime}:00`;
 
 const endAt = allDay
-  ? `${date}T23:59:59+09:00`
-  : `${date}T${endTime}:00+09:00`;
+  ? `${date}T23:59:59`
+  : `${date}T${endTime}:00`;
 
 if (editingEvent) {
   const { error } = await supabase
