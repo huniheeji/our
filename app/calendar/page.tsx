@@ -196,6 +196,14 @@ String(date.getMonth() + 1).padStart(2, "0") +
 String(date.getDate()).padStart(2, "0")
 );
 }
+  function seoulTimeToUTC(date: string, time: string) {
+  const [year, month, day] = date.split("-").map(Number);
+  const [hour, minute] = time.split(":").map(Number);
+
+  return new Date(
+    Date.UTC(year, month - 1, day, hour - 9, minute)
+  ).toISOString();
+}
 
 function openAddModal(date = selectedDate) {
 setEditingEvent(null);
@@ -262,12 +270,12 @@ if (!myUserId) {
 const date = dateToInput(selectedDate);
 
 const startAt = allDay
-  ? `${date}T00:00:00+09:00`
-  : `${date}T${startTime}:00+09:00`;
+  ? seoulTimeToUTC(date, "00:00")
+  : seoulTimeToUTC(date, startTime);
 
 const endAt = allDay
-  ? `${date}T23:59:59+09:00`
-  : `${date}T${endTime}:00+09:00`;
+  ? seoulTimeToUTC(date, "23:59")
+  : seoulTimeToUTC(date, endTime);
 
 if (editingEvent) {
   const { error } = await supabase
