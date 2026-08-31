@@ -253,10 +253,25 @@ export default function MemoriesPage() {
         ascending: true,
       });
 
-    if (error) {
-      console.error("사진 조회 오류:", error);
-      return;
-    }
+  if (error) {
+  console.error("========== MEMORY PHOTOS 조회 실패 ==========");
+  console.error("error:", error);
+  console.error("message:", error.message);
+  console.error("details:", error.details);
+  console.error("hint:", error.hint);
+  console.error("code:", error.code);
+  console.error("==============================================");
+
+  alert(
+    `사진 조회 실패\n\n` +
+    `code: ${error.code || "-"}\n` +
+    `message: ${error.message || "-"}\n` +
+    `details: ${error.details || "-"}\n` +
+    `hint: ${error.hint || "-"}`
+  );
+
+  return;
+}
 
     setPhotos(data || []);
   }
