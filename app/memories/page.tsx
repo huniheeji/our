@@ -1,4 +1,3 @@
-```tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -37,6 +36,7 @@ type MemoryComment = {
   content: string;
   created_by: string | null;
   created_at: string;
+  updated_at: string;
 };
 
 type PendingPhoto = {
@@ -49,6 +49,59 @@ const YOUNGHUN_ID = "c2e77c6f-0c9a-403c-a66d-234e021357b0";
 const HEEJI_ID = "92dac467-922d-4ef4-b353-eb84593d9761";
 
 const PHOTO_BUCKET = "memory-photos";
+
+/* =========================================================
+   댓글 입력창
+   중요:
+   MemoriesPage 밖에 별도 컴포넌트로 둡니다.
+   그래야 부모 페이지가 realtime으로 다시 렌더링되어도
+   한글 IME 조합 중 포커스가 끊기지 않습니다.
+========================================================= */
+
+function CommentInput({
+  value,
+  onChange,
+  onSubmit,
+  saving,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+  saving: boolean;
+}) {
+  return (
+    <div className="mt-5 flex items-end gap-2">
+      <textarea
+        value={value}
+        onChange={(event) => {
+          onChange(event.target.value);
+        }}
+        onKeyDown={(event) => {
+          if (
+            event.key === "Enter" &&
+            !event.shiftKey &&
+            !event.nativeEvent.isComposing
+          ) {
+            event.preventDefault();
+            onSubmit();
+          }
+        }}
+        placeholder="댓글을 남겨보세요..."
+        rows={1}
+        className="min-h-[44px] flex-1 resize-none rounded-xl border border-[#d4e8f2] bg-[#f7fcff] px-4 py-3 text-sm leading-6 text-[#554b47] outline-none transition placeholder:text-[#b7c8cf] focus:border-[#bcd9e6] focus:bg-white"
+      />
+
+      <button
+        type="button"
+        onClick={onSubmit}
+        disabled={saving || !value.trim()}
+        className="shrink-0 rounded-xl bg-[#dff2fb] px-4 py-3 text-sm font-semibold text-[#456572] transition hover:bg-[#ccebf7] disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {saving ? "..." : "등록"}
+      </button>
+    </div>
+  );
+}
 
 export default function MemoriesPage() {
   const [parts, setParts] = useState<MemoryPart[]>([]);
@@ -191,6 +244,10 @@ export default function MemoriesPage() {
     };
   }, []);
 
+  /* =========================================================
+     DATA
+  ========================================================= */
+
   async function loadData() {
     await Promise.all([
       loadParts(),
@@ -292,14 +349,6 @@ export default function MemoriesPage() {
         "=============================================="
       );
 
-      alert(
-        `사진 조회 실패\n\n` +
-          `code: ${error.code || "-"}\n` +
-          `message: ${error.message || "-"}\n` +
-          `details: ${error.details || "-"}\n` +
-          `hint: ${error.hint || "-"}`
-      );
-
       return;
     }
 
@@ -322,7 +371,13 @@ export default function MemoriesPage() {
     setComments(data || []);
   }
 
-  function getAuthorName(userId: string | null) {
+  /* =========================================================
+     AUTHOR
+  ========================================================= */
+
+  function getAuthorName(
+    userId: string | null
+  ) {
     if (userId === YOUNGHUN_ID) {
       return "영훈";
     }
@@ -334,7 +389,13 @@ export default function MemoriesPage() {
     return "우리";
   }
 
-  function getPartMemories(partId: string) {
+  /* =========================================================
+     MEMORY / PART
+  ========================================================= */
+
+  function getPartMemories(
+    partId: string
+  ) {
     return memories
       .filter(
         (memory) =>
@@ -347,21 +408,31 @@ export default function MemoriesPage() {
       );
   }
 
-  function getMemoryPhotos(memoryId: string) {
+  function getMemoryPhotos(
+    memoryId: string
+  ) {
     return photos.filter(
       (photo) =>
         photo.memory_id === memoryId
     );
   }
 
-  function getMemoryComments(memoryId: string) {
+  function getMemoryComments(
+    memoryId: string
+  ) {
     return comments.filter(
       (comment) =>
         comment.memory_id === memoryId
     );
   }
 
-  function getPhotoUrl(filePath: string) {
+  /* =========================================================
+     PHOTO
+  ========================================================= */
+
+  function getPhotoUrl(
+    filePath: string
+  ) {
     const { data } =
       supabase.storage
         .from(PHOTO_BUCKET)
@@ -369,6 +440,10 @@ export default function MemoriesPage() {
 
     return data.publicUrl;
   }
+
+  /* =========================================================
+     SELECT
+  ========================================================= */
 
   function selectPart(part: MemoryPart) {
     setSelectedPart(part);
@@ -435,6 +510,10 @@ export default function MemoriesPage() {
       setContent("");
     }
   }
+
+  /* =========================================================
+     PART MODAL
+  ========================================================= */
 
   function openNewPartModal() {
     setEditingPart(null);
@@ -551,6 +630,23 @@ export default function MemoriesPage() {
           .remove(filePaths);
       }
 
+      const { error: commentError } =
+        await supabase
+          .from("memory_comments")
+          .delete()
+          .in(
+            "memory_id",
+            memoryIds
+          );
+
+      if (commentError) {
+        alert(
+          "댓글 정보 삭제 실패: " +
+            commentError.message
+        );
+        return;
+      }
+
       const { error: photoError } =
         await supabase
           .from("memory_photos")
@@ -564,23 +660,6 @@ export default function MemoriesPage() {
         alert(
           "사진 정보 삭제 실패: " +
             photoError.message
-        );
-        return;
-      }
-
-      const { error: commentError } =
-        await supabase
-          .from("memory_comments")
-          .delete()
-          .in(
-            "memory_id",
-            memoryIds
-          );
-
-      if (commentError) {
-        alert(
-          "댓글 삭제 실패: " +
-            commentError.message
         );
         return;
       }
@@ -631,6 +710,10 @@ export default function MemoriesPage() {
 
     await loadData();
   }
+
+  /* =========================================================
+     PHOTO SELECT
+  ========================================================= */
 
   function handlePhotoSelect(
     event: React.ChangeEvent<HTMLInputElement>
@@ -721,6 +804,10 @@ export default function MemoriesPage() {
       }
     );
   }
+
+  /* =========================================================
+     UPLOAD PHOTOS
+  ========================================================= */
 
   async function uploadPhotos(
     memoryId: string
@@ -868,6 +955,10 @@ export default function MemoriesPage() {
     }
   }
 
+  /* =========================================================
+     DELETE PHOTO
+  ========================================================= */
+
   async function deletePhoto(
     photo: MemoryPhoto
   ) {
@@ -916,96 +1007,9 @@ export default function MemoriesPage() {
     await loadPhotos();
   }
 
-  async function addComment() {
-    if (!selectedMemory) {
-      return;
-    }
-
-    const text =
-      commentText.trim();
-
-    if (!text) {
-      return;
-    }
-
-    setCommentSaving(true);
-
-    try {
-      const { error } =
-        await supabase
-          .from(
-            "memory_comments"
-          )
-          .insert({
-            memory_id:
-              selectedMemory.id,
-            content: text,
-            created_by:
-              myUserId,
-          });
-
-      if (error) {
-        console.error(
-          "댓글 저장 오류:",
-          error
-        );
-
-        alert(
-          "댓글 저장 실패: " +
-            error.message
-        );
-
-        return;
-      }
-
-      setCommentText("");
-
-      await loadComments();
-    } finally {
-      setCommentSaving(false);
-    }
-  }
-
-  async function deleteComment(
-    comment: MemoryComment
-  ) {
-    if (
-      comment.created_by !==
-      myUserId
-    ) {
-      return;
-    }
-
-    const confirmed =
-      window.confirm(
-        "이 댓글을 삭제할까요?"
-      );
-
-    if (!confirmed) {
-      return;
-    }
-
-    const { error } =
-      await supabase
-        .from(
-          "memory_comments"
-        )
-        .delete()
-        .eq(
-          "id",
-          comment.id
-        );
-
-    if (error) {
-      alert(
-        "댓글 삭제 실패: " +
-          error.message
-      );
-      return;
-    }
-
-    await loadComments();
-  }
+  /* =========================================================
+     SAVE MEMORY
+  ========================================================= */
 
   async function saveMemory() {
     if (!selectedPart) {
@@ -1147,6 +1151,10 @@ export default function MemoriesPage() {
     }
   }
 
+  /* =========================================================
+     DELETE MEMORY
+  ========================================================= */
+
   async function deleteMemory() {
     if (!selectedMemory) return;
 
@@ -1190,6 +1198,25 @@ export default function MemoriesPage() {
     }
 
     const {
+      error: commentError,
+    } =
+      await supabase
+        .from("memory_comments")
+        .delete()
+        .eq(
+          "memory_id",
+          selectedMemory.id
+        );
+
+    if (commentError) {
+      alert(
+        "댓글 정보 삭제 실패: " +
+          commentError.message
+      );
+      return;
+    }
+
+    const {
       error: photoError,
     } =
       await supabase
@@ -1204,25 +1231,6 @@ export default function MemoriesPage() {
       alert(
         "사진 정보 삭제 실패: " +
           photoError.message
-      );
-      return;
-    }
-
-    const {
-      error: commentError,
-    } =
-      await supabase
-        .from("memory_comments")
-        .delete()
-        .eq(
-          "memory_id",
-          selectedMemory.id
-        );
-
-    if (commentError) {
-      alert(
-        "댓글 삭제 실패: " +
-          commentError.message
       );
       return;
     }
@@ -1257,6 +1265,99 @@ export default function MemoriesPage() {
     await loadComments();
   }
 
+  /* =========================================================
+     COMMENTS
+  ========================================================= */
+
+  async function saveComment() {
+    if (!selectedMemory) return;
+
+    const text =
+      commentText.trim();
+
+    if (!text) {
+      return;
+    }
+
+    setCommentSaving(true);
+
+    try {
+      const { error } =
+        await supabase
+          .from("memory_comments")
+          .insert({
+            memory_id:
+              selectedMemory.id,
+            content: text,
+            created_by:
+              myUserId,
+          });
+
+      if (error) {
+        console.error(
+          "댓글 저장 오류:",
+          error
+        );
+
+        alert(
+          "댓글 저장 실패: " +
+            error.message
+        );
+
+        return;
+      }
+
+      setCommentText("");
+
+      await loadComments();
+    } finally {
+      setCommentSaving(false);
+    }
+  }
+
+  async function deleteComment(
+    comment: MemoryComment
+  ) {
+    if (
+      comment.created_by !==
+      myUserId
+    ) {
+      return;
+    }
+
+    const confirmed =
+      window.confirm(
+        "이 댓글을 삭제할까요?"
+      );
+
+    if (!confirmed) {
+      return;
+    }
+
+    const { error } =
+      await supabase
+        .from("memory_comments")
+        .delete()
+        .eq(
+          "id",
+          comment.id
+        );
+
+    if (error) {
+      alert(
+        "댓글 삭제 실패: " +
+          error.message
+      );
+      return;
+    }
+
+    await loadComments();
+  }
+
+  /* =========================================================
+     DATE
+  ========================================================= */
+
   function formatDate(
     dateString: string
   ) {
@@ -1272,22 +1373,9 @@ export default function MemoriesPage() {
     );
   }
 
-  function formatCommentDate(
-    dateString: string
-  ) {
-    return new Date(
-      dateString
-    ).toLocaleString(
-      "ko-KR",
-      {
-        year: "numeric",
-        month: "numeric",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      }
-    );
-  }
+  /* =========================================================
+     PHOTO GALLERY
+  ========================================================= */
 
   function PhotoGallery({
     memoryId,
@@ -1362,6 +1450,10 @@ export default function MemoriesPage() {
     );
   }
 
+  /* =========================================================
+     PENDING PHOTOS
+  ========================================================= */
+
   function PendingPhotoGallery() {
     if (
       pendingPhotos.length ===
@@ -1413,7 +1505,11 @@ export default function MemoriesPage() {
     );
   }
 
-  function CommentSection({
+  /* =========================================================
+     COMMENTS SECTION
+  ========================================================= */
+
+  function CommentsSection({
     memoryId,
   }: {
     memoryId: string;
@@ -1430,48 +1526,36 @@ export default function MemoriesPage() {
             COMMENTS
           </p>
 
-          <p className="mt-1 text-sm font-bold text-[#554b47]">
-            우리들의 한마디 ·{" "}
-            {memoryComments.length}
+          <p className="mt-1 text-sm font-semibold text-[#554b47]">
+            우리들의 댓글{" "}
+            <span className="text-[#9eb0b9]">
+              {memoryComments.length}
+            </span>
           </p>
         </div>
 
-        <div className="space-y-3">
-          {memoryComments.length ===
-          0 ? (
-            <div className="rounded-2xl bg-[#f7fcff] px-4 py-5 text-center text-xs leading-5 text-[#9eb0b9]">
-              아직 댓글이 없어요.
-              <br />
-              이 기억에 한마디 남겨보세요 💙
-            </div>
-          ) : (
-            memoryComments.map(
+        {memoryComments.length >
+          0 && (
+          <div className="space-y-3">
+            {memoryComments.map(
               (comment) => (
                 <div
                   key={comment.id}
                   className="rounded-2xl bg-[#f7fcff] px-4 py-3"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-xs font-bold text-[#587582]">
-                          {getAuthorName(
-                            comment.created_by
-                          )}
-                        </span>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-[#587582]">
+                        {getAuthorName(
+                          comment.created_by
+                        )}
+                      </span>
 
-                        <span className="text-[10px] text-[#a3b4bc]">
-                          {formatCommentDate(
-                            comment.created_at
-                          )}
-                        </span>
-                      </div>
-
-                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[#554b47]">
-                        {
-                          comment.content
-                        }
-                      </p>
+                      <span className="text-[10px] text-[#a3b4bc]">
+                        {formatDate(
+                          comment.created_at
+                        )}
+                      </span>
                     </div>
 
                     {comment.created_by ===
@@ -1483,56 +1567,41 @@ export default function MemoriesPage() {
                             comment
                           )
                         }
-                        className="shrink-0 text-[11px] text-[#b8c5ca] hover:text-red-400"
+                        className="text-[10px] text-[#b5a5a0] hover:text-red-400"
                       >
                         삭제
                       </button>
                     )}
                   </div>
+
+                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[#554b47]">
+                    {
+                      comment.content
+                    }
+                  </p>
                 </div>
               )
-            )
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
-        <div className="mt-4 flex gap-2">
-          <input
-            value={commentText}
-            onChange={(e) =>
-              setCommentText(
-                e.target.value
-              )
-            }
-            onKeyDown={(e) => {
-              if (
-                e.key === "Enter" &&
-                !e.shiftKey
-              ) {
-                e.preventDefault();
-                addComment();
-              }
-            }}
-            placeholder="이 기억에 한마디 남겨보세요..."
-            className="min-w-0 flex-1 rounded-xl bg-[#f1f8fb] px-4 py-3 text-sm text-[#554b47] outline-none placeholder:text-[#aebfc6] focus:ring-2 focus:ring-[#dff2fb]"
-          />
+        <CommentInput
+          value={commentText}
+          onChange={setCommentText}
+          onSubmit={saveComment}
+          saving={commentSaving}
+        />
 
-          <button
-            type="button"
-            onClick={addComment}
-            disabled={
-              commentSaving ||
-              !commentText.trim()
-            }
-            className="shrink-0 rounded-xl bg-[#dff2fb] px-4 py-3 text-sm font-semibold text-[#456572] transition hover:bg-[#ccebf7] disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {commentSaving
-              ? "..."
-              : "등록"}
-          </button>
-        </div>
+        <p className="mt-2 text-[10px] text-[#a3b4bc]">
+          Enter로 등록 · Shift + Enter로 줄바꿈
+        </p>
       </div>
     );
   }
+
+  /* =========================================================
+     LOADING
+  ========================================================= */
 
   if (loading) {
     return (
@@ -1549,9 +1618,15 @@ export default function MemoriesPage() {
         )
       : [];
 
+  /* =========================================================
+     PAGE
+  ========================================================= */
+
   return (
     <main className="min-h-screen bg-[#eaf6fc] text-[#3d3532]">
       <div className="mx-auto flex min-h-screen max-w-7xl flex-col px-4 py-5 md:px-8">
+
+        {/* HEADER */}
 
         <header className="mb-5 flex items-center justify-between">
           <div>
@@ -1592,7 +1667,9 @@ export default function MemoriesPage() {
           </div>
         </header>
 
-        {/* ================= DESKTOP ================= */}
+        {/* =====================================================
+            DESKTOP
+        ===================================================== */}
 
         <div className="hidden min-h-[720px] flex-1 overflow-hidden rounded-3xl bg-white/90 shadow-sm md:flex">
 
@@ -2054,17 +2131,6 @@ export default function MemoriesPage() {
                     />
                   )}
 
-                  {/* COMMENTS */}
-
-                  {selectedMemory &&
-                    !isEditing && (
-                      <CommentSection
-                        memoryId={
-                          selectedMemory.id
-                        }
-                      />
-                    )}
-
                   {/* NEW PHOTOS */}
 
                   {isEditing && (
@@ -2098,6 +2164,16 @@ export default function MemoriesPage() {
 
                       <PendingPhotoGallery />
                     </>
+                  )}
+
+                  {/* COMMENTS */}
+
+                  {selectedMemory && (
+                    <CommentsSection
+                      memoryId={
+                        selectedMemory.id
+                      }
+                    />
                   )}
 
                   {isEditing && (
@@ -2160,7 +2236,9 @@ export default function MemoriesPage() {
           </section>
         </div>
 
-        {/* ================= MOBILE ================= */}
+        {/* =====================================================
+            MOBILE
+        ===================================================== */}
 
         <div className="md:hidden">
 
@@ -2434,17 +2512,6 @@ export default function MemoriesPage() {
                     />
                   )}
 
-                  {/* MOBILE COMMENTS */}
-
-                  {selectedMemory &&
-                    !isEditing && (
-                      <CommentSection
-                        memoryId={
-                          selectedMemory.id
-                        }
-                      />
-                    )}
-
                   {isEditing && (
                     <>
                       <div className="mt-6">
@@ -2468,35 +2535,47 @@ export default function MemoriesPage() {
                       </div>
 
                       <PendingPhotoGallery />
-
-                      <div className="mt-5 flex gap-2 border-t border-[#d4e8f2] pt-5">
-
-                        <button
-                          onClick={
-                            cancelMemory
-                          }
-                          className="flex-1 rounded-xl bg-[#f2f7f9] py-3 text-sm font-semibold text-[#78909a]"
-                        >
-                          취소
-                        </button>
-
-                        <button
-                          onClick={
-                            saveMemory
-                          }
-                          disabled={
-                            saving ||
-                            photoLoading
-                          }
-                          className="flex-1 rounded-xl bg-[#dff2fb] py-3 text-sm font-semibold text-[#456572] disabled:opacity-50"
-                        >
-                          {saving ||
-                          photoLoading
-                            ? "저장 중..."
-                            : "저장"}
-                        </button>
-                      </div>
                     </>
+                  )}
+
+                  {/* MOBILE COMMENTS */}
+
+                  {selectedMemory && (
+                    <CommentsSection
+                      memoryId={
+                        selectedMemory.id
+                      }
+                    />
+                  )}
+
+                  {isEditing && (
+                    <div className="mt-5 flex gap-2 border-t border-[#d4e8f2] pt-5">
+
+                      <button
+                        onClick={
+                          cancelMemory
+                        }
+                        className="flex-1 rounded-xl bg-[#f2f7f9] py-3 text-sm font-semibold text-[#78909a]"
+                      >
+                        취소
+                      </button>
+
+                      <button
+                        onClick={
+                          saveMemory
+                        }
+                        disabled={
+                          saving ||
+                          photoLoading
+                        }
+                        className="flex-1 rounded-xl bg-[#dff2fb] py-3 text-sm font-semibold text-[#456572] disabled:opacity-50"
+                      >
+                        {saving ||
+                        photoLoading
+                          ? "저장 중..."
+                          : "저장"}
+                      </button>
+                    </div>
                   )}
                 </div>
               )}
@@ -2505,7 +2584,9 @@ export default function MemoriesPage() {
         </div>
       </div>
 
-      {/* ================= PART MODAL ================= */}
+      {/* =====================================================
+          PART MODAL
+      ===================================================== */}
 
       {showPartModal && (
         <div
@@ -2609,4 +2690,3 @@ export default function MemoriesPage() {
     </main>
   );
 }
-```
