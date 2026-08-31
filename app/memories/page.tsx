@@ -51,7 +51,6 @@ export default function MemoriesPage() {
   const [showPartModal, setShowPartModal] =
     useState(false);
 
-  // 핵심: 새 메모 작성 화면인지 여부
   const [isCreating, setIsCreating] = useState(false);
 
   useEffect(() => {
@@ -243,7 +242,6 @@ export default function MemoriesPage() {
     setContent(memory.content);
   }
 
-  // 새 메모 버튼의 실제 동작
   function createNewMemory() {
     if (!selectedPart) {
       alert(
@@ -541,7 +539,6 @@ export default function MemoriesPage() {
     <main className="min-h-screen bg-[#eaf6fc] text-[#3d3532]">
       <div className="mx-auto flex min-h-screen max-w-7xl flex-col px-4 py-5 md:px-8">
 
-        {/* HEADER */}
         <header className="mb-5 flex items-center justify-between">
           <div>
             <button
@@ -577,10 +574,8 @@ export default function MemoriesPage() {
           </div>
         </header>
 
-        {/* DESKTOP */}
         <div className="hidden min-h-[720px] flex-1 overflow-hidden rounded-3xl bg-white/90 shadow-sm md:flex">
 
-          {/* PARTS */}
           <aside className="w-56 shrink-0 border-r border-[#d4e8f2] bg-[#f7fcff]">
             <div className="flex h-full flex-col">
 
@@ -657,9 +652,7 @@ export default function MemoriesPage() {
                             className="min-w-0 flex-1 px-3 py-3 text-left"
                           >
                             <div className="flex items-center gap-2">
-                              <span>
-                                📁
-                              </span>
+                              <span>📁</span>
 
                               <span
                                 className={`truncate text-sm font-semibold ${
@@ -707,7 +700,6 @@ export default function MemoriesPage() {
             </div>
           </aside>
 
-          {/* MEMORY LIST */}
           <aside className="w-72 shrink-0 border-r border-[#d4e8f2] bg-white">
             <div className="flex h-full flex-col">
 
@@ -726,7 +718,9 @@ export default function MemoriesPage() {
                   </div>
 
                   <button
-                    onClick={createNewMemory}
+                    onClick={
+                      createNewMemory
+                    }
                     disabled={!selectedPart}
                     className="shrink-0 rounded-xl bg-[#dff2fb] px-3 py-2 text-xs font-semibold text-[#456572] disabled:cursor-not-allowed disabled:opacity-40"
                   >
@@ -750,8 +744,7 @@ export default function MemoriesPage() {
                       </p>
                     </div>
                   </div>
-                ) : selectedPartMemories.length ===
-                  0 ? (
+                ) : selectedPartMemories.length === 0 ? (
                   <div className="flex min-h-[400px] items-center justify-center text-center">
                     <div>
                       <div className="text-4xl">
@@ -826,7 +819,6 @@ export default function MemoriesPage() {
             </div>
           </aside>
 
-          {/* EDITOR */}
           <section className="min-w-0 flex-1 bg-white">
             {!selectedPart ? (
               <div className="flex h-full min-h-[650px] items-center justify-center text-center">
@@ -854,6 +846,7 @@ export default function MemoriesPage() {
                 <div className="flex items-center justify-between border-b border-[#d4e8f2] px-8 py-4">
                   <div className="flex min-w-0 items-center gap-2 text-xs text-[#8b9fa9]">
                     <span>📁</span>
+
                     <span>
                       {selectedPart.name}
                     </span>
@@ -869,7 +862,9 @@ export default function MemoriesPage() {
 
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={cancelMemory}
+                      onClick={
+                        cancelMemory
+                      }
                       className="rounded-lg px-3 py-2 text-xs font-semibold text-[#8b9fa9] hover:bg-[#edf8fc]"
                     >
                       취소
@@ -931,7 +926,9 @@ export default function MemoriesPage() {
                     </p>
 
                     <button
-                      onClick={saveMemory}
+                      onClick={
+                        saveMemory
+                      }
                       disabled={saving}
                       className="rounded-xl bg-[#dff2fb] px-6 py-3 text-sm font-semibold text-[#456572] transition hover:bg-[#ccebf7] disabled:opacity-50"
                     >
@@ -973,10 +970,8 @@ export default function MemoriesPage() {
           </section>
         </div>
 
-        {/* MOBILE */}
         <div className="md:hidden">
 
-          {/* 모바일 파트 */}
           <div className="rounded-2xl bg-white/90 p-4 shadow-sm">
 
             <div className="mb-3 flex items-center justify-between">
@@ -1016,7 +1011,6 @@ export default function MemoriesPage() {
 
           {selectedPart && (
             <>
-              {/* 모바일 메모 목록 */}
               {!isCreating &&
                 !selectedMemory && (
                   <div className="mt-3 rounded-2xl bg-white/90 p-4 shadow-sm">
@@ -1097,7 +1091,6 @@ export default function MemoriesPage() {
                   </div>
                 )}
 
-              {/* 모바일 작성 / 수정 */}
               {(isCreating ||
                 selectedMemory) && (
                 <div className="mt-3 rounded-2xl bg-white/90 p-5 shadow-sm">
@@ -1184,7 +1177,6 @@ export default function MemoriesPage() {
         </div>
       </div>
 
-      {/* PART MODAL */}
       {showPartModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-5"
