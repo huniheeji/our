@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
 
 type MemoryPart = {
@@ -21,10 +21,16 @@ type Memory = {
   updated_at: string;
 };
 
+type MemoryPhoto = {
+  path: string;
+  url: string;
+  name: string;
+};
+
 const YOUNGHUN_ID = "c2e77c6f-0c9a-403c-a66d-234e021357b0";
 const HEEJI_ID = "92dac467-922d-4ef4-b353-eb84593d9761";
 
-const PHOTO_MARKER = "[[PHOTO]]";
+const PHOTO_BUCKET = "memory-photos";
 
 export default function MemoriesPage() {
   const [parts, setParts] = useState<MemoryPart[]>([]);
@@ -48,12 +54,22 @@ export default function MemoriesPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   const [showPartModal, setShowPartModal] =
     useState(false);
 
   const [isCreating, setIsCreating] = useState(false);
+
+  const [photos, setPhotos] = useState<MemoryPhoto[]>([]);
+  const [uploadingPhotos, setUploadingPhotos] =
+    useState(false);
+
+  const [previewFiles, setPreviewFiles] = useState<
+    { file: File; url: string }[]
+  >([]);
+
+  const photoInputRef =
+    useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -119,6 +135,10 @@ export default function MemoriesPage() {
 
     return () => {
       mounted = false;
+
+      previewFiles.forEach((item) => {
+        URL.revokeObjectURL(item.url);
+      });
 
       if (channel) {
         supabase.removeChannel(channel);
@@ -190,14 +210,71 @@ export default function MemoriesPage() {
       if (!updated) {
         setTitle("");
         setContent("");
+        setPhotos([]);
         return null;
       }
 
       setTitle(updated.title);
       setContent(updated.content);
 
+      loadPhotos(updated.id);
+
       return updated;
     });
+  }
+
+  async function loadPhotos(memoryId: string) {
+    const folder = memoryId;
+
+    const { data, error } = await supabase.storage
+      .from(PHOTO_BUCKET)
+      .list(folder, {
+        limit: 100,
+        sortBy: {
+          column: "created_at",
+          order: "asc",
+        },
+      });
+
+    if (error) {
+      console.error("사진 목록 조회 오류:", error);
+      setPhotos([]);
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      setPhotos([]);
+      return;
+    }
+
+    const photoResults: MemoryPhoto[] = [];
+
+    for (const file of data) {
+      if (!file.name) continue;
+
+      const path = `${folder}/${file.name}`;
+
+      const { data: signedData, error: signedError } =
+        await supabase.storage
+          .from(PHOTO_BUCKET)
+          .createSignedUrl(path, 60 * 60 * 24);
+
+      if (signedError || !signedData?.signedUrl) {
+        console.error(
+          "사진 URL 생성 오류:",
+          signedError
+        );
+        continue;
+      }
+
+      photoResults.push({
+        path,
+        url: signedData.signedUrl,
+        name: file.name,
+      });
+    }
+
+    setPhotos(photoResults);
   }
 
   function getAuthorName(
@@ -235,6 +312,8 @@ export default function MemoriesPage() {
     setIsCreating(false);
     setTitle("");
     setContent("");
+    setPhotos([]);
+    clearPreviewFiles();
   }
 
   function selectMemory(memory: Memory) {
@@ -242,6 +321,8 @@ export default function MemoriesPage() {
     setIsCreating(false);
     setTitle(memory.title);
     setContent(memory.content);
+    clearPreviewFiles();
+    loadPhotos(memory.id);
   }
 
   function createNewMemory() {
@@ -256,6 +337,8 @@ export default function MemoriesPage() {
     setIsCreating(true);
     setTitle("");
     setContent("");
+    setPhotos([]);
+    clearPreviewFiles();
   }
 
   function cancelMemory() {
@@ -263,6 +346,8 @@ export default function MemoriesPage() {
     setIsCreating(false);
     setTitle("");
     setContent("");
+    setPhotos([]);
+    clearPreviewFiles();
   }
 
   function openNewPartModal() {
@@ -277,6 +362,160 @@ export default function MemoriesPage() {
     setEditingPart(part);
     setPartName(part.name);
     setShowPartModal(true);
+  }
+
+  function clearPreviewFiles() {
+    setPreviewFiles((current) => {
+      current.forEach((item) =>
+        URL.revokeObjectURL(item.url)
+      );
+
+      return [];
+    });
+  }
+
+  function handlePhotoSelect(
+    event: React.ChangeEvent<HTMLInputElement>
+  ) {
+    const files = Array.from(
+      event.target.files || []
+    );
+
+    if (files.length === 0) return;
+
+    const validFiles = files.filter((file) => {
+      if (!file.type.startsWith("image/")) {
+        alert(
+          `${file.name}은(는) 이미지 파일이 아닙니다.`
+        );
+        return false;
+      }
+
+      if (file.size > 10 * 1024 * 1024) {
+        alert(
+          `${file.name}은(는) 10MB를 초과합니다.`
+        );
+        return false;
+      }
+
+      return true;
+    });
+
+    const newPreviews = validFiles.map((file) => ({
+      file,
+      url: URL.createObjectURL(file),
+    }));
+
+    setPreviewFiles((current) => [
+      ...current,
+      ...newPreviews,
+    ]);
+
+    event.target.value = "";
+  }
+
+  function removePreviewFile(index: number) {
+    setPreviewFiles((current) => {
+      const target = current[index];
+
+      if (target) {
+        URL.revokeObjectURL(target.url);
+      }
+
+      return current.filter(
+        (_, i) => i !== index
+      );
+    });
+  }
+
+  async function uploadPhotos(
+    memoryId: string
+  ) {
+    if (previewFiles.length === 0) {
+      return;
+    }
+
+    setUploadingPhotos(true);
+
+    try {
+      for (const item of previewFiles) {
+        const file = item.file;
+
+        const extension =
+          file.name.split(".").pop() || "jpg";
+
+        const safeExtension =
+          extension.toLowerCase();
+
+        const fileName = `${Date.now()}-${Math.random()
+          .toString(36)
+          .substring(2, 10)}.${safeExtension}`;
+
+        const path = `${memoryId}/${fileName}`;
+
+        const { error } =
+          await supabase.storage
+            .from(PHOTO_BUCKET)
+            .upload(path, file, {
+              cacheControl: "3600",
+              upsert: false,
+              contentType: file.type,
+            });
+
+        if (error) {
+          console.error(
+            "사진 업로드 오류:",
+            error
+          );
+
+          alert(
+            `사진 업로드 실패: ${error.message}`
+          );
+
+          continue;
+        }
+      }
+
+      clearPreviewFiles();
+
+      await loadPhotos(memoryId);
+    } finally {
+      setUploadingPhotos(false);
+    }
+  }
+
+  async function deletePhoto(
+    photo: MemoryPhoto
+  ) {
+    const confirmed = window.confirm(
+      "이 사진을 삭제할까요?"
+    );
+
+    if (!confirmed) return;
+
+    const { error } =
+      await supabase.storage
+        .from(PHOTO_BUCKET)
+        .remove([photo.path]);
+
+    if (error) {
+      alert(
+        "사진 삭제 실패: " +
+          error.message
+      );
+      return;
+    }
+
+    setPhotos((current) =>
+      current.filter(
+        (item) =>
+          item.path !== photo.path
+      )
+    );
+
+    if (selectedMemory) {
+      await loadPhotos(selectedMemory.id);
+    }
   }
 
   async function savePart() {
@@ -355,6 +594,16 @@ export default function MemoriesPage() {
     if (!confirmed) return;
 
     if (partMemories.length > 0) {
+      for (const memory of partMemories) {
+        await supabase.storage
+          .from(PHOTO_BUCKET)
+          .remove(
+            await getPhotoPaths(
+              memory.id
+            )
+          );
+      }
+
       const { error } =
         await supabase
           .from("memories")
@@ -395,253 +644,28 @@ export default function MemoriesPage() {
     setIsCreating(false);
     setTitle("");
     setContent("");
+    setPhotos([]);
 
     await loadData();
   }
 
-  async function uploadPhoto(
-    file: File
-  ) {
-    if (!myUserId) {
-      alert(
-        "로그인 정보를 확인할 수 없습니다."
-      );
-      return null;
-    }
-
-    if (!file.type.startsWith("image/")) {
-      alert(
-        "이미지 파일만 업로드할 수 있습니다."
-      );
-      return null;
-    }
-
-    if (file.size > 20 * 1024 * 1024) {
-      alert(
-        "사진은 20MB 이하만 업로드할 수 있습니다."
-      );
-      return null;
-    }
-
-    const extension =
-      file.name.split(".").pop() ||
-      "jpg";
-
-    const filePath =
-      `${myUserId}/${crypto.randomUUID()}.${extension}`;
-
-    const { error } =
-      await supabase.storage
-        .from("memory-photos")
-        .upload(
-          filePath,
-          file,
-          {
-            cacheControl: "3600",
-            upsert: false,
-            contentType: file.type,
-          }
-        );
-
-    if (error) {
-      console.error(
-        "사진 업로드 오류:",
-        error
-      );
-
-      alert(
-        "사진 업로드 실패: " +
-          error.message
-      );
-
-      return null;
-    }
-
+  async function getPhotoPaths(
+    memoryId: string
+  ): Promise<string[]> {
     const { data } =
-      supabase.storage
-        .from("memory-photos")
-        .getPublicUrl(
-          filePath
-        );
+      await supabase.storage
+        .from(PHOTO_BUCKET)
+        .list(memoryId, {
+          limit: 100,
+        });
 
-    return data.publicUrl;
-  }
+    if (!data) return [];
 
-  async function handlePhotoUpload(
-    event: React.ChangeEvent<HTMLInputElement>
-  ) {
-    const files =
-      event.target.files;
-
-    if (!files || files.length === 0) {
-      return;
-    }
-
-    setUploadingPhoto(true);
-
-    try {
-      const uploadedUrls: string[] =
-        [];
-
-      for (
-        let i = 0;
-        i < files.length;
-        i++
-      ) {
-        const url =
-          await uploadPhoto(
-            files[i]
-          );
-
-        if (url) {
-          uploadedUrls.push(url);
-        }
-      }
-
-      if (
-        uploadedUrls.length > 0
-      ) {
-        const photoText =
-          uploadedUrls
-            .map(
-              (url) =>
-                `${PHOTO_MARKER}${url}`
-            )
-            .join("\n");
-
-        setContent(
-          (prev) =>
-            prev
-              ? `${prev}\n\n${photoText}`
-              : photoText
-        );
-      }
-    } finally {
-      setUploadingPhoto(false);
-      event.target.value = "";
-    }
-  }
-
-  function parseContent(
-    value: string
-  ) {
-    const parts =
-      value.split(
-        /\[\[PHOTO\]\]/
-      );
-
-    return parts;
-  }
-
-  function renderContent(
-    value: string
-  ) {
-    const chunks =
-      parseContent(value);
-
-    return (
-      <div className="space-y-5">
-        {chunks.map(
-          (chunk, index) => {
-            const lines =
-              chunk.split("\n");
-
-            const elements: React.ReactNode[] =
-              [];
-
-            lines.forEach(
-              (line, lineIndex) => {
-                const trimmed =
-                  line.trim();
-
-                if (
-                  trimmed.startsWith(
-                    "http"
-                  ) &&
-                  (
-                    trimmed.includes(
-                      "memory-photos"
-                    ) ||
-                    trimmed.match(
-                      /\.(jpg|jpeg|png|gif|webp|heic|heif)/i
-                    )
-                  )
-                ) {
-                  elements.push(
-                    <img
-                      key={`${index}-${lineIndex}`}
-                      src={trimmed}
-                      alt="메모 사진"
-                      className="max-w-full rounded-2xl object-contain"
-                    />
-                  );
-                } else if (
-                  trimmed
-                ) {
-                  elements.push(
-                    <p
-                      key={`${index}-${lineIndex}`}
-                      className="whitespace-pre-wrap"
-                    >
-                      {line}
-                    </p>
-                  );
-                }
-              }
-            );
-
-            return (
-              <div
-                key={index}
-                className="space-y-3"
-              >
-                {elements}
-              </div>
-            );
-          }
-        )}
-      </div>
-    );
-  }
-
-  function removePhoto(
-    url: string
-  ) {
-    const next =
-      content
-        .split("\n")
-        .filter(
-          (line) =>
-            line.trim() !==
-            `${PHOTO_MARKER}${url}`
-        )
-        .join("\n")
-        .replace(
-          /\n{3,}/g,
-          "\n\n"
-        )
-        .trim();
-
-    setContent(next);
-  }
-
-  function getPhotoUrls(
-    value: string
-  ) {
-    return value
-      .split("\n")
-      .filter(
-        (line) =>
-          line.startsWith(
-            PHOTO_MARKER
-          )
-      )
+    return data
+      .filter((file) => file.name)
       .map(
-        (line) =>
-          line.replace(
-            PHOTO_MARKER,
-            ""
-          )
+        (file) =>
+          `${memoryId}/${file.name}`
       );
   }
 
@@ -661,6 +685,8 @@ export default function MemoriesPage() {
     setSaving(true);
 
     try {
+      let memoryId = selectedMemory?.id;
+
       if (selectedMemory) {
         const { error } =
           await supabase
@@ -694,8 +720,7 @@ export default function MemoriesPage() {
               content,
               part_id:
                 selectedPart.id,
-              created_by:
-                myUserId,
+              created_by: myUserId,
             })
             .select()
             .single();
@@ -709,8 +734,28 @@ export default function MemoriesPage() {
         }
 
         if (data) {
+          memoryId = data.id;
           setSelectedMemory(data);
         }
+      }
+
+      if (memoryId) {
+        await uploadPhotos(memoryId);
+
+        const { data: refreshed } =
+          await supabase
+            .from("memories")
+            .select("*")
+            .eq("id", memoryId)
+            .single();
+
+        if (refreshed) {
+          setSelectedMemory(refreshed);
+          setTitle(refreshed.title);
+          setContent(refreshed.content);
+        }
+
+        await loadPhotos(memoryId);
       }
 
       setIsCreating(false);
@@ -723,12 +768,30 @@ export default function MemoriesPage() {
   async function deleteMemory() {
     if (!selectedMemory) return;
 
-    const confirmed =
-      window.confirm(
-        "이 메모를 삭제할까요?"
-      );
+    const confirmed = window.confirm(
+      "이 메모와 사진을 모두 삭제할까요?"
+    );
 
     if (!confirmed) return;
+
+    const photoPaths =
+      await getPhotoPaths(
+        selectedMemory.id
+      );
+
+    if (photoPaths.length > 0) {
+      const { error: photoError } =
+        await supabase.storage
+          .from(PHOTO_BUCKET)
+          .remove(photoPaths);
+
+      if (photoError) {
+        console.error(
+          "사진 삭제 오류:",
+          photoError
+        );
+      }
+    }
 
     const { error } =
       await supabase
@@ -751,6 +814,7 @@ export default function MemoriesPage() {
     setIsCreating(false);
     setTitle("");
     setContent("");
+    setPhotos([]);
 
     await loadMemories();
   }
@@ -793,8 +857,7 @@ export default function MemoriesPage() {
           <div>
             <button
               onClick={() => {
-                window.location.href =
-                  "/";
+                window.location.href = "/";
               }}
               className="mb-3 text-sm text-[#8b9fa9] transition hover:text-[#3d3532]"
             >
@@ -816,9 +879,7 @@ export default function MemoriesPage() {
             </span>
 
             <button
-              onClick={
-                createNewMemory
-              }
+              onClick={createNewMemory}
               disabled={!selectedPart}
               className="rounded-xl bg-white px-4 py-3 text-sm font-semibold text-[#3d3532] shadow-sm transition hover:bg-[#f7fcff] disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -845,9 +906,7 @@ export default function MemoriesPage() {
                   </div>
 
                   <button
-                    onClick={
-                      openNewPartModal
-                    }
+                    onClick={openNewPartModal}
                     className="flex h-8 w-8 items-center justify-center rounded-lg bg-white text-lg text-[#587582] shadow-sm hover:bg-[#eaf6fc]"
                   >
                     +
@@ -856,8 +915,7 @@ export default function MemoriesPage() {
               </div>
 
               <div className="flex-1 overflow-y-auto p-3">
-                {parts.length ===
-                0 ? (
+                {parts.length === 0 ? (
                   <div className="px-3 py-10 text-center">
                     <div className="text-3xl">
                       📁
@@ -880,74 +938,65 @@ export default function MemoriesPage() {
                   </div>
                 ) : (
                   <div className="space-y-1">
-                    {parts.map(
-                      (part) => {
-                        const count =
-                          getPartMemories(
-                            part.id
-                          ).length;
+                    {parts.map((part) => {
+                      const count =
+                        getPartMemories(
+                          part.id
+                        ).length;
 
-                        const active =
-                          selectedPart?.id ===
-                          part.id;
+                      const active =
+                        selectedPart?.id ===
+                        part.id;
 
-                        return (
-                          <div
-                            key={
-                              part.id
+                      return (
+                        <div
+                          key={part.id}
+                          className={`group flex items-center rounded-xl transition ${
+                            active
+                              ? "bg-[#dff2fb]"
+                              : "hover:bg-[#edf8fc]"
+                          }`}
+                        >
+                          <button
+                            onClick={() =>
+                              selectPart(
+                                part
+                              )
                             }
-                            className={`group flex items-center rounded-xl transition ${
-                              active
-                                ? "bg-[#dff2fb]"
-                                : "hover:bg-[#edf8fc]"
-                            }`}
+                            className="min-w-0 flex-1 px-3 py-3 text-left"
                           >
-                            <button
-                              onClick={() =>
-                                selectPart(
-                                  part
-                                )
-                              }
-                              className="min-w-0 flex-1 px-3 py-3 text-left"
-                            >
-                              <div className="flex items-center gap-2">
-                                <span>
-                                  📁
-                                </span>
+                            <div className="flex items-center gap-2">
+                              <span>📁</span>
 
-                                <span
-                                  className={`truncate text-sm font-semibold ${
-                                    active
-                                      ? "text-[#456572]"
-                                      : "text-[#665c58]"
-                                  }`}
-                                >
-                                  {
-                                    part.name
-                                  }
-                                </span>
-                              </div>
+                              <span
+                                className={`truncate text-sm font-semibold ${
+                                  active
+                                    ? "text-[#456572]"
+                                    : "text-[#665c58]"
+                                }`}
+                              >
+                                {part.name}
+                              </span>
+                            </div>
 
-                              <p className="mt-1 pl-6 text-[11px] text-[#9eb0b9]">
-                                {count}
-                                개
-                              </p>
-                            </button>
+                            <p className="mt-1 pl-6 text-[11px] text-[#9eb0b9]">
+                              {count}개
+                            </p>
+                          </button>
 
-                            <button
-                              onClick={() =>
-                                openEditPartModal(
-                                  part
-                                )
-                              }
-                              className="mr-2 hidden h-7 w-7 items-center justify-center rounded-lg text-xs text-[#8fa3ad] hover:bg-white group-hover:flex"
-                            >
-                              ···
-                            </button>
-                          </div>
-                        );
-                      }
-                    )}
+                          <button
+                            onClick={() =>
+                              openEditPartModal(
+                                part
+                              )
+                            }
+                            className="mr-2 hidden h-7 w-7 items-center justify-center rounded-lg text-xs text-[#8fa3ad] hover:bg-white group-hover:flex"
+                          >
+                            ···
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -986,9 +1035,7 @@ export default function MemoriesPage() {
                     onClick={
                       createNewMemory
                     }
-                    disabled={
-                      !selectedPart
-                    }
+                    disabled={!selectedPart}
                     className="shrink-0 rounded-xl bg-[#dff2fb] px-3 py-2 text-xs font-semibold text-[#456572] disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     + 메모
@@ -1011,8 +1058,7 @@ export default function MemoriesPage() {
                       </p>
                     </div>
                   </div>
-                ) : selectedPartMemories.length ===
-                  0 ? (
+                ) : selectedPartMemories.length === 0 ? (
                   <div className="flex min-h-[400px] items-center justify-center text-center">
                     <div>
                       <div className="text-4xl">
@@ -1043,9 +1089,7 @@ export default function MemoriesPage() {
 
                         return (
                           <button
-                            key={
-                              memory.id
-                            }
+                            key={memory.id}
                             onClick={() =>
                               selectMemory(
                                 memory
@@ -1058,18 +1102,11 @@ export default function MemoriesPage() {
                             }`}
                           >
                             <p className="truncate text-sm font-semibold">
-                              {
-                                memory.title
-                              }
+                              {memory.title}
                             </p>
 
                             <p className="mt-2 line-clamp-2 text-xs leading-5 text-[#8b9fa9]">
-                              {memory.content
-                                .replace(
-                                  /\[\[PHOTO\]\][^\n]*/g,
-                                  ""
-                                )
-                                .trim() ||
+                              {memory.content ||
                                 "내용 없음"}
                             </p>
 
@@ -1122,19 +1159,13 @@ export default function MemoriesPage() {
 
                 <div className="flex items-center justify-between border-b border-[#d4e8f2] px-8 py-4">
                   <div className="flex min-w-0 items-center gap-2 text-xs text-[#8b9fa9]">
-                    <span>
-                      📁
-                    </span>
+                    <span>📁</span>
 
                     <span>
-                      {
-                        selectedPart.name
-                      }
+                      {selectedPart.name}
                     </span>
 
-                    <span>
-                      ›
-                    </span>
+                    <span>›</span>
 
                     <span className="truncate">
                       {selectedMemory
@@ -1179,9 +1210,7 @@ export default function MemoriesPage() {
                   </div>
 
                   <input
-                    autoFocus={
-                      isCreating
-                    }
+                    autoFocus={isCreating}
                     value={title}
                     onChange={(e) =>
                       setTitle(
@@ -1194,127 +1223,142 @@ export default function MemoriesPage() {
 
                   <div className="my-7 h-px bg-[#d4e8f2]" />
 
-                  <div className="mb-5 flex items-center gap-3">
-                    <label className="cursor-pointer rounded-xl bg-[#dff2fb] px-4 py-2.5 text-xs font-semibold text-[#456572] transition hover:bg-[#ccebf7]">
-                      {uploadingPhoto
-                        ? "사진 업로드 중..."
-                        : "📷 사진 추가"}
+                  <textarea
+                    value={content}
+                    onChange={(e) =>
+                      setContent(
+                        e.target.value
+                      )
+                    }
+                    placeholder="기억하고 싶은 이야기를 자유롭게 적어보세요..."
+                    className="min-h-[300px] w-full resize-none border-0 bg-transparent text-[15px] leading-8 text-[#554b47] outline-none placeholder:text-[#b7c8cf]"
+                  />
 
-                      <input
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        onChange={
-                          handlePhotoUpload
-                        }
-                        disabled={
-                          uploadingPhoto
-                        }
-                        className="hidden"
-                      />
-                    </label>
+                  {photos.length > 0 && (
+                    <div className="mt-8">
+                      <p className="mb-3 text-xs font-semibold text-[#78909a]">
+                        사진
+                      </p>
 
-                    {getPhotoUrls(
-                      content
-                    ).length >
-                      0 && (
-                      <span className="text-xs text-[#9eb0b9]">
-                        사진{" "}
-                        {
-                          getPhotoUrls(
-                            content
-                          ).length
-                        }
-                        장
-                      </span>
-                    )}
-                  </div>
-
-                  {getPhotoUrls(
-                    content
-                  ).length >
-                    0 && (
-                    <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-3">
-                      {getPhotoUrls(
-                        content
-                      ).map(
-                        (url) => (
-                          <div
-                            key={
-                              url
-                            }
-                            className="relative overflow-hidden rounded-2xl bg-[#f4f9fb]"
-                          >
-                            <img
-                              src={url}
-                              alt="업로드한 사진"
-                              className="h-40 w-full object-cover"
-                            />
-
-                            <button
-                              type="button"
-                              onClick={() =>
-                                removePhoto(
-                                  url
-                                )
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                        {photos.map(
+                          (photo) => (
+                            <div
+                              key={
+                                photo.path
                               }
-                              className="absolute right-2 top-2 rounded-full bg-black/60 px-2.5 py-1 text-xs text-white"
+                              className="group relative overflow-hidden rounded-2xl bg-[#f4f9fb]"
                             >
-                              ×
-                            </button>
-                          </div>
-                        )
-                      )}
+                              <img
+                                src={
+                                  photo.url
+                                }
+                                alt="Memory photo"
+                                className="aspect-square w-full object-cover"
+                              />
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  deletePhoto(
+                                    photo
+                                  )
+                                }
+                                className="absolute right-2 top-2 hidden rounded-lg bg-black/50 px-2 py-1 text-xs text-white group-hover:block"
+                              >
+                                삭제
+                              </button>
+                            </div>
+                          )
+                        )}
+                      </div>
                     </div>
                   )}
 
-                  <textarea
-                    value={content.replace(
-                      /\[\[PHOTO\]\][^\n]*/g,
-                      ""
-                    )}
-                    onChange={(e) => {
-                      const photos =
-                        getPhotoUrls(
-                          content
-                        );
+                  {previewFiles.length > 0 && (
+                    <div className="mt-6">
+                      <p className="mb-3 text-xs font-semibold text-[#78909a]">
+                        추가할 사진
+                      </p>
 
-                      const photoText =
-                        photos
-                          .map(
-                            (url) =>
-                              `${PHOTO_MARKER}${url}`
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                        {previewFiles.map(
+                          (item, index) => (
+                            <div
+                              key={`${item.file.name}-${index}`}
+                              className="group relative overflow-hidden rounded-2xl bg-[#f4f9fb]"
+                            >
+                              <img
+                                src={
+                                  item.url
+                                }
+                                alt="Preview"
+                                className="aspect-square w-full object-cover"
+                              />
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  removePreviewFile(
+                                    index
+                                  )
+                                }
+                                className="absolute right-2 top-2 rounded-lg bg-black/50 px-2 py-1 text-xs text-white"
+                              >
+                                ×
+                              </button>
+                            </div>
                           )
-                          .join(
-                            "\n"
-                          );
+                        )}
+                      </div>
+                    </div>
+                  )}
 
-                      setContent(
-                        e.target.value +
-                          (photoText
-                            ? `\n\n${photoText}`
-                            : "")
-                      );
-                    }}
-                    placeholder="기억하고 싶은 이야기를 자유롭게 적어보세요..."
-                    className="min-h-[480px] w-full resize-none border-0 bg-transparent text-[15px] leading-8 text-[#554b47] outline-none placeholder:text-[#b7c8cf]"
-                  />
+                  <div className="mt-6 flex flex-wrap items-center gap-3">
+                    <input
+                      ref={photoInputRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={
+                        handlePhotoSelect
+                      }
+                      className="hidden"
+                    />
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        photoInputRef.current?.click()
+                      }
+                      className="rounded-xl border border-[#c9e2ed] bg-[#f7fcff] px-4 py-2.5 text-xs font-semibold text-[#587582] transition hover:bg-[#eaf6fc]"
+                    >
+                      📷 사진 추가
+                    </button>
+
+                    <p className="text-[11px] text-[#a3b4bc]">
+                      JPG, PNG, WEBP · 최대 10MB
+                    </p>
+                  </div>
 
                   <div className="mt-6 flex items-center justify-between border-t border-[#d4e8f2] pt-5">
                     <p className="text-xs text-[#9eb0b9]">
-                      {
-                        selectedPart.name
-                      }
+                      {selectedPart.name}
                     </p>
 
                     <button
                       onClick={
                         saveMemory
                       }
-                      disabled={saving}
+                      disabled={
+                        saving ||
+                        uploadingPhotos
+                      }
                       className="rounded-xl bg-[#dff2fb] px-6 py-3 text-sm font-semibold text-[#456572] transition hover:bg-[#ccebf7] disabled:opacity-50"
                     >
-                      {saving
+                      {uploadingPhotos
+                        ? "사진 업로드 중..."
+                        : saving
                         ? "저장 중..."
                         : "저장"}
                     </button>
@@ -1329,9 +1373,7 @@ export default function MemoriesPage() {
                   </div>
 
                   <h2 className="mt-5 text-lg font-bold">
-                    {
-                      selectedPart.name
-                    }
+                    {selectedPart.name}
                   </h2>
 
                   <p className="mt-2 text-sm text-[#8b9fa9]">
@@ -1374,31 +1416,22 @@ export default function MemoriesPage() {
             </div>
 
             <div className="flex gap-2 overflow-x-auto pb-1">
-              {parts.map(
-                (part) => (
-                  <button
-                    key={
-                      part.id
-                    }
-                    onClick={() =>
-                      selectPart(
-                        part
-                      )
-                    }
-                    className={`shrink-0 rounded-xl px-4 py-2 text-sm ${
-                      selectedPart?.id ===
-                      part.id
-                        ? "bg-[#dff2fb] font-semibold text-[#456572]"
-                        : "bg-[#f4f9fb] text-[#766b67]"
-                    }`}
-                  >
-                    📁{" "}
-                    {
-                      part.name
-                    }
-                  </button>
-                )
-              )}
+              {parts.map((part) => (
+                <button
+                  key={part.id}
+                  onClick={() =>
+                    selectPart(part)
+                  }
+                  className={`shrink-0 rounded-xl px-4 py-2 text-sm ${
+                    selectedPart?.id ===
+                    part.id
+                      ? "bg-[#dff2fb] font-semibold text-[#456572]"
+                      : "bg-[#f4f9fb] text-[#766b67]"
+                  }`}
+                >
+                  📁 {part.name}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -1410,9 +1443,7 @@ export default function MemoriesPage() {
 
                     <div className="mb-4 flex items-center justify-between">
                       <h2 className="font-bold">
-                        {
-                          selectedPart.name
-                        }
+                        {selectedPart.name}
                       </h2>
 
                       <button
@@ -1448,9 +1479,7 @@ export default function MemoriesPage() {
                     ) : (
                       <div className="space-y-2">
                         {selectedPartMemories.map(
-                          (
-                            memory
-                          ) => (
+                          (memory) => (
                             <button
                               key={
                                 memory.id
@@ -1463,18 +1492,11 @@ export default function MemoriesPage() {
                               className="w-full rounded-xl bg-[#f4f9fb] p-4 text-left transition hover:bg-[#eaf6fc]"
                             >
                               <p className="font-semibold">
-                                {
-                                  memory.title
-                                }
+                                {memory.title}
                               </p>
 
                               <p className="mt-1 line-clamp-2 text-xs text-[#8b9fa9]">
-                                {memory.content
-                                  .replace(
-                                    /\[\[PHOTO\]\][^\n]*/g,
-                                    ""
-                                  )
-                                  .trim() ||
+                                {memory.content ||
                                   "내용 없음"}
                               </p>
 
@@ -1540,94 +1562,121 @@ export default function MemoriesPage() {
 
                   <div className="my-4 h-px bg-[#d4e8f2]" />
 
-                  <label className="mb-4 inline-flex cursor-pointer rounded-xl bg-[#dff2fb] px-4 py-2.5 text-xs font-semibold text-[#456572]">
-                    {uploadingPhoto
-                      ? "사진 업로드 중..."
-                      : "📷 사진 추가"}
-
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      onChange={
-                        handlePhotoUpload
-                      }
-                      disabled={
-                        uploadingPhoto
-                      }
-                      className="hidden"
-                    />
-                  </label>
-
-                  {getPhotoUrls(
-                    content
-                  ).length >
-                    0 && (
-                    <div className="mb-5 grid grid-cols-2 gap-3">
-                      {getPhotoUrls(
-                        content
-                      ).map(
-                        (url) => (
-                          <div
-                            key={
-                              url
-                            }
-                            className="relative overflow-hidden rounded-2xl"
-                          >
-                            <img
-                              src={url}
-                              alt="업로드한 사진"
-                              className="h-36 w-full object-cover"
-                            />
-
-                            <button
-                              type="button"
-                              onClick={() =>
-                                removePhoto(
-                                  url
-                                )
-                              }
-                              className="absolute right-2 top-2 rounded-full bg-black/60 px-2.5 py-1 text-xs text-white"
-                            >
-                              ×
-                            </button>
-                          </div>
-                        )
-                      )}
-                    </div>
-                  )}
-
                   <textarea
-                    value={content.replace(
-                      /\[\[PHOTO\]\][^\n]*/g,
-                      ""
-                    )}
-                    onChange={(e) => {
-                      const photos =
-                        getPhotoUrls(
-                          content
-                        );
-
-                      const photoText =
-                        photos
-                          .map(
-                            (url) =>
-                              `${PHOTO_MARKER}${url}`
-                          )
-                          .join(
-                            "\n"
-                          );
-
+                    value={content}
+                    onChange={(e) =>
                       setContent(
-                        e.target.value +
-                          (photoText
-                            ? `\n\n${photoText}`
-                            : "")
-                      );
-                    }}
+                        e.target.value
+                      )
+                    }
                     placeholder="기억하고 싶은 이야기를 자유롭게 적어보세요..."
                     className="min-h-[300px] w-full resize-none border-0 bg-transparent text-sm leading-7 text-[#554b47] outline-none placeholder:text-[#b7c8cf]"
                   />
+
+                  {photos.length > 0 && (
+                    <div className="mt-6">
+                      <p className="mb-3 text-xs font-semibold text-[#78909a]">
+                        사진
+                      </p>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        {photos.map(
+                          (photo) => (
+                            <div
+                              key={
+                                photo.path
+                              }
+                              className="group relative overflow-hidden rounded-2xl"
+                            >
+                              <img
+                                src={
+                                  photo.url
+                                }
+                                alt="Memory photo"
+                                className="aspect-square w-full object-cover"
+                              />
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  deletePhoto(
+                                    photo
+                                  )
+                                }
+                                className="absolute right-2 top-2 rounded-lg bg-black/50 px-2 py-1 text-xs text-white"
+                              >
+                                삭제
+                              </button>
+                            </div>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {previewFiles.length > 0 && (
+                    <div className="mt-5">
+                      <p className="mb-3 text-xs font-semibold text-[#78909a]">
+                        추가할 사진
+                      </p>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        {previewFiles.map(
+                          (item, index) => (
+                            <div
+                              key={`${item.file.name}-${index}`}
+                              className="relative overflow-hidden rounded-2xl"
+                            >
+                              <img
+                                src={
+                                  item.url
+                                }
+                                alt="Preview"
+                                className="aspect-square w-full object-cover"
+                              />
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  removePreviewFile(
+                                    index
+                                  )
+                                }
+                                className="absolute right-2 top-2 rounded-lg bg-black/50 px-2 py-1 text-xs text-white"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <input
+                    ref={photoInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={
+                      handlePhotoSelect
+                    }
+                    className="hidden"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      photoInputRef.current?.click()
+                    }
+                    className="mt-5 w-full rounded-xl border border-[#c9e2ed] bg-[#f7fcff] py-3 text-sm font-semibold text-[#587582]"
+                  >
+                    📷 사진 추가
+                  </button>
+
+                  <p className="mt-2 text-center text-[11px] text-[#a3b4bc]">
+                    JPG, PNG, WEBP · 사진 1장당 최대 10MB
+                  </p>
 
                   <div className="mt-5 flex gap-2 border-t border-[#d4e8f2] pt-5">
 
@@ -1644,10 +1693,15 @@ export default function MemoriesPage() {
                       onClick={
                         saveMemory
                       }
-                      disabled={saving}
+                      disabled={
+                        saving ||
+                        uploadingPhotos
+                      }
                       className="flex-1 rounded-xl bg-[#dff2fb] py-3 text-sm font-semibold text-[#456572] disabled:opacity-50"
                     >
-                      {saving
+                      {uploadingPhotos
+                        ? "업로드 중..."
+                        : saving
                         ? "저장 중..."
                         : "저장"}
                     </button>
@@ -1690,9 +1744,7 @@ export default function MemoriesPage() {
 
               <button
                 onClick={() =>
-                  setShowPartModal(
-                    false
-                  )
+                  setShowPartModal(false)
                 }
                 className="text-xl text-[#8b9fa9]"
               >
@@ -1710,8 +1762,7 @@ export default function MemoriesPage() {
               }
               onKeyDown={(e) => {
                 if (
-                  e.key ===
-                  "Enter"
+                  e.key === "Enter"
                 ) {
                   savePart();
                 }
@@ -1735,9 +1786,7 @@ export default function MemoriesPage() {
 
               <button
                 onClick={() =>
-                  setShowPartModal(
-                    false
-                  )
+                  setShowPartModal(false)
                 }
                 className="flex-1 rounded-xl bg-[#f1f6f8] py-3 text-sm font-semibold text-[#78909a]"
               >
@@ -1745,9 +1794,7 @@ export default function MemoriesPage() {
               </button>
 
               <button
-                onClick={
-                  savePart
-                }
+                onClick={savePart}
                 className="flex-1 rounded-xl bg-[#dff2fb] py-3 text-sm font-semibold text-[#456572]"
               >
                 {editingPart
@@ -1761,4 +1808,3 @@ export default function MemoriesPage() {
     </main>
   );
 }
-
