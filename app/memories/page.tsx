@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 
 type MemoryPart = {
@@ -22,9 +22,16 @@ type Memory = {
 };
 
 type MemoryPhoto = {
-  path: string;
+  id: string;
+  memory_id: string;
+  file_path: string;
+  file_name: string;
+  created_by: string | null;
+  created_at: string;
+};
+
+type PhotoWithUrl = MemoryPhoto & {
   url: string;
-  name: string;
 };
 
 const YOUNGHUN_ID = "c2e77c6f-0c9a-403c-a66d-234e021357b0";
@@ -54,25 +61,25 @@ export default function MemoriesPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] =
+    useState(false);
 
   const [showPartModal, setShowPartModal] =
     useState(false);
 
   const [isCreating, setIsCreating] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
 
-  const [photos, setPhotos] = useState<MemoryPhoto[]>([]);
-  const [uploadingPhotos, setUploadingPhotos] =
-    useState(false);
+  const [photos, setPhotos] = useState<PhotoWithUrl[]>(
+    []
+  );
 
-  const [previewFiles, setPreviewFiles] = useState<
-    { file: File; url: string }[]
-  >([]);
-
-  const photoInputRef =
-    useRef<HTMLInputElement | null>(null);
+  const [photoInputKey, setPhotoInputKey] =
+    useState(0);
 
   useEffect(() => {
     let mounted = true;
+
     let channel: ReturnType<typeof supabase.channel> | null =
       null;
 
@@ -126,6 +133,19 @@ export default function MemoriesPage() {
             await loadParts();
           }
         )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "memory_photos",
+          },
+          async () => {
+            if (selectedMemory) {
+              await loadPhotos(selectedMemory.id);
+            }
+          }
+        )
         .subscribe();
 
       setLoading(false);
@@ -136,15 +156,11 @@ export default function MemoriesPage() {
     return () => {
       mounted = false;
 
-      previewFiles.forEach((item) => {
-        URL.revokeObjectURL(item.url);
-      });
-
       if (channel) {
         supabase.removeChannel(channel);
       }
     };
-  }, []);
+  }, [selectedMemory?.id]);
 
   async function loadData() {
     await Promise.all([
@@ -214,31 +230,26 @@ export default function MemoriesPage() {
         return null;
       }
 
-      setTitle(updated.title);
-      setContent(updated.content);
-
-      loadPhotos(updated.id);
+      if (!isEditing) {
+        setTitle(updated.title);
+        setContent(updated.content);
+      }
 
       return updated;
     });
   }
 
   async function loadPhotos(memoryId: string) {
-    const folder = memoryId;
-
-    const { data, error } = await supabase.storage
-      .from(PHOTO_BUCKET)
-      .list(folder, {
-        limit: 100,
-        sortBy: {
-          column: "created_at",
-          order: "asc",
-        },
+    const { data, error } = await supabase
+      .from("memory_photos")
+      .select("*")
+      .eq("memory_id", memoryId)
+      .order("created_at", {
+        ascending: true,
       });
 
     if (error) {
-      console.error("사진 목록 조회 오류:", error);
-      setPhotos([]);
+      console.error("사진 조회 오류:", error);
       return;
     }
 
@@ -247,34 +258,45 @@ export default function MemoriesPage() {
       return;
     }
 
-    const photoResults: MemoryPhoto[] = [];
+    const photoPaths = data.map(
+      (photo: MemoryPhoto) => photo.file_path
+    );
 
-    for (const file of data) {
-      if (!file.name) continue;
-
-      const path = `${folder}/${file.name}`;
-
-      const { data: signedData, error: signedError } =
-        await supabase.storage
-          .from(PHOTO_BUCKET)
-          .createSignedUrl(path, 60 * 60 * 24);
-
-      if (signedError || !signedData?.signedUrl) {
-        console.error(
-          "사진 URL 생성 오류:",
-          signedError
+    const { data: signedUrls, error: urlError } =
+      await supabase.storage
+        .from(PHOTO_BUCKET)
+        .createSignedUrls(
+          photoPaths,
+          60 * 60 * 24
         );
-        continue;
-      }
 
-      photoResults.push({
-        path,
-        url: signedData.signedUrl,
-        name: file.name,
-      });
+    if (urlError) {
+      console.error(
+        "사진 URL 생성 오류:",
+        urlError
+      );
+
+      setPhotos([]);
+      return;
     }
 
-    setPhotos(photoResults);
+    const photosWithUrls: PhotoWithUrl[] =
+      data.map(
+        (
+          photo: MemoryPhoto,
+          index: number
+        ) => ({
+          ...photo,
+          url:
+            signedUrls?.[index]?.signedUrl || "",
+        })
+      );
+
+    setPhotos(
+      photosWithUrls.filter(
+        (photo) => photo.url
+      )
+    );
   }
 
   function getAuthorName(
@@ -301,8 +323,12 @@ export default function MemoriesPage() {
       )
       .sort(
         (a, b) =>
-          new Date(b.updated_at).getTime() -
-          new Date(a.updated_at).getTime()
+          new Date(
+            b.updated_at
+          ).getTime() -
+          new Date(
+            a.updated_at
+          ).getTime()
       );
   }
 
@@ -310,19 +336,21 @@ export default function MemoriesPage() {
     setSelectedPart(part);
     setSelectedMemory(null);
     setIsCreating(false);
+    setIsEditing(false);
     setTitle("");
     setContent("");
     setPhotos([]);
-    clearPreviewFiles();
   }
 
-  function selectMemory(memory: Memory) {
+  async function selectMemory(memory: Memory) {
     setSelectedMemory(memory);
     setIsCreating(false);
+    setIsEditing(false);
+
     setTitle(memory.title);
     setContent(memory.content);
-    clearPreviewFiles();
-    loadPhotos(memory.id);
+
+    await loadPhotos(memory.id);
   }
 
   function createNewMemory() {
@@ -335,19 +363,39 @@ export default function MemoriesPage() {
 
     setSelectedMemory(null);
     setIsCreating(true);
+    setIsEditing(true);
     setTitle("");
     setContent("");
     setPhotos([]);
-    clearPreviewFiles();
+  }
+
+  function startEditing() {
+    if (!selectedMemory) return;
+
+    setIsEditing(true);
+    setTitle(selectedMemory.title);
+    setContent(selectedMemory.content);
   }
 
   function cancelMemory() {
+    if (selectedMemory) {
+      setIsEditing(false);
+      setIsCreating(false);
+
+      setTitle(selectedMemory.title);
+      setContent(selectedMemory.content);
+
+      loadPhotos(selectedMemory.id);
+
+      return;
+    }
+
     setSelectedMemory(null);
     setIsCreating(false);
+    setIsEditing(false);
     setTitle("");
     setContent("");
     setPhotos([]);
-    clearPreviewFiles();
   }
 
   function openNewPartModal() {
@@ -362,160 +410,6 @@ export default function MemoriesPage() {
     setEditingPart(part);
     setPartName(part.name);
     setShowPartModal(true);
-  }
-
-  function clearPreviewFiles() {
-    setPreviewFiles((current) => {
-      current.forEach((item) =>
-        URL.revokeObjectURL(item.url)
-      );
-
-      return [];
-    });
-  }
-
-  function handlePhotoSelect(
-    event: React.ChangeEvent<HTMLInputElement>
-  ) {
-    const files = Array.from(
-      event.target.files || []
-    );
-
-    if (files.length === 0) return;
-
-    const validFiles = files.filter((file) => {
-      if (!file.type.startsWith("image/")) {
-        alert(
-          `${file.name}은(는) 이미지 파일이 아닙니다.`
-        );
-        return false;
-      }
-
-      if (file.size > 10 * 1024 * 1024) {
-        alert(
-          `${file.name}은(는) 10MB를 초과합니다.`
-        );
-        return false;
-      }
-
-      return true;
-    });
-
-    const newPreviews = validFiles.map((file) => ({
-      file,
-      url: URL.createObjectURL(file),
-    }));
-
-    setPreviewFiles((current) => [
-      ...current,
-      ...newPreviews,
-    ]);
-
-    event.target.value = "";
-  }
-
-  function removePreviewFile(index: number) {
-    setPreviewFiles((current) => {
-      const target = current[index];
-
-      if (target) {
-        URL.revokeObjectURL(target.url);
-      }
-
-      return current.filter(
-        (_, i) => i !== index
-      );
-    });
-  }
-
-  async function uploadPhotos(
-    memoryId: string
-  ) {
-    if (previewFiles.length === 0) {
-      return;
-    }
-
-    setUploadingPhotos(true);
-
-    try {
-      for (const item of previewFiles) {
-        const file = item.file;
-
-        const extension =
-          file.name.split(".").pop() || "jpg";
-
-        const safeExtension =
-          extension.toLowerCase();
-
-        const fileName = `${Date.now()}-${Math.random()
-          .toString(36)
-          .substring(2, 10)}.${safeExtension}`;
-
-        const path = `${memoryId}/${fileName}`;
-
-        const { error } =
-          await supabase.storage
-            .from(PHOTO_BUCKET)
-            .upload(path, file, {
-              cacheControl: "3600",
-              upsert: false,
-              contentType: file.type,
-            });
-
-        if (error) {
-          console.error(
-            "사진 업로드 오류:",
-            error
-          );
-
-          alert(
-            `사진 업로드 실패: ${error.message}`
-          );
-
-          continue;
-        }
-      }
-
-      clearPreviewFiles();
-
-      await loadPhotos(memoryId);
-    } finally {
-      setUploadingPhotos(false);
-    }
-  }
-
-  async function deletePhoto(
-    photo: MemoryPhoto
-  ) {
-    const confirmed = window.confirm(
-      "이 사진을 삭제할까요?"
-    );
-
-    if (!confirmed) return;
-
-    const { error } =
-      await supabase.storage
-        .from(PHOTO_BUCKET)
-        .remove([photo.path]);
-
-    if (error) {
-      alert(
-        "사진 삭제 실패: " +
-          error.message
-      );
-      return;
-    }
-
-    setPhotos((current) =>
-      current.filter(
-        (item) =>
-          item.path !== photo.path
-      )
-    );
-
-    if (selectedMemory) {
-      await loadPhotos(selectedMemory.id);
-    }
   }
 
   async function savePart() {
@@ -574,6 +468,7 @@ export default function MemoriesPage() {
       setSelectedPart(data);
       setSelectedMemory(null);
       setIsCreating(false);
+      setIsEditing(false);
     }
   }
 
@@ -593,17 +488,13 @@ export default function MemoriesPage() {
 
     if (!confirmed) return;
 
-    if (partMemories.length > 0) {
-      for (const memory of partMemories) {
-        await supabase.storage
-          .from(PHOTO_BUCKET)
-          .remove(
-            await getPhotoPaths(
-              memory.id
-            )
-          );
-      }
+    for (const memory of partMemories) {
+      await deleteMemoryPhotos(
+        memory.id
+      );
+    }
 
+    if (partMemories.length > 0) {
       const { error } =
         await supabase
           .from("memories")
@@ -642,31 +533,12 @@ export default function MemoriesPage() {
     setShowPartModal(false);
     setSelectedMemory(null);
     setIsCreating(false);
+    setIsEditing(false);
     setTitle("");
     setContent("");
     setPhotos([]);
 
     await loadData();
-  }
-
-  async function getPhotoPaths(
-    memoryId: string
-  ): Promise<string[]> {
-    const { data } =
-      await supabase.storage
-        .from(PHOTO_BUCKET)
-        .list(memoryId, {
-          limit: 100,
-        });
-
-    if (!data) return [];
-
-    return data
-      .filter((file) => file.name)
-      .map(
-        (file) =>
-          `${memoryId}/${file.name}`
-      );
   }
 
   async function saveMemory() {
@@ -685,8 +557,6 @@ export default function MemoriesPage() {
     setSaving(true);
 
     try {
-      let memoryId = selectedMemory?.id;
-
       if (selectedMemory) {
         const { error } =
           await supabase
@@ -711,6 +581,19 @@ export default function MemoriesPage() {
           );
           return;
         }
+
+        const updatedMemory = {
+          ...selectedMemory,
+          title: title.trim(),
+          content,
+          part_id: selectedPart.id,
+          updated_at:
+            new Date().toISOString(),
+        };
+
+        setSelectedMemory(
+          updatedMemory
+        );
       } else {
         const { data, error } =
           await supabase
@@ -734,64 +617,231 @@ export default function MemoriesPage() {
         }
 
         if (data) {
-          memoryId = data.id;
           setSelectedMemory(data);
         }
       }
 
-      if (memoryId) {
-        await uploadPhotos(memoryId);
-
-        const { data: refreshed } =
-          await supabase
-            .from("memories")
-            .select("*")
-            .eq("id", memoryId)
-            .single();
-
-        if (refreshed) {
-          setSelectedMemory(refreshed);
-          setTitle(refreshed.title);
-          setContent(refreshed.content);
-        }
-
-        await loadPhotos(memoryId);
-      }
-
       setIsCreating(false);
+      setIsEditing(false);
+
       await loadMemories();
     } finally {
       setSaving(false);
     }
   }
 
-  async function deleteMemory() {
-    if (!selectedMemory) return;
+  async function uploadPhotos(
+    files: FileList | File[]
+  ) {
+    if (!selectedMemory) {
+      alert(
+        "먼저 메모를 저장해주세요."
+      );
+      return;
+    }
 
-    const confirmed = window.confirm(
-      "이 메모와 사진을 모두 삭제할까요?"
-    );
+    const fileArray = Array.from(files);
 
-    if (!confirmed) return;
+    if (fileArray.length === 0) return;
 
-    const photoPaths =
-      await getPhotoPaths(
+    setUploadingPhoto(true);
+
+    try {
+      for (const file of fileArray) {
+        if (!file.type.startsWith("image/")) {
+          alert(
+            `${file.name}은 이미지 파일이 아닙니다.`
+          );
+          continue;
+        }
+
+        const extension =
+          file.name.includes(".")
+            ? file.name
+                .split(".")
+                .pop()
+                ?.toLowerCase() || "jpg"
+            : "jpg";
+
+        const safeFileName =
+          `${crypto.randomUUID()}.${extension}`;
+
+        const filePath =
+          `${myUserId}/${selectedMemory.id}/${safeFileName}`;
+
+        const {
+          error: uploadError,
+        } = await supabase.storage
+          .from(PHOTO_BUCKET)
+          .upload(
+            filePath,
+            file,
+            {
+              cacheControl: "3600",
+              upsert: false,
+              contentType:
+                file.type,
+            }
+          );
+
+        if (uploadError) {
+          console.error(
+            "사진 업로드 오류:",
+            uploadError
+          );
+
+          alert(
+            `${file.name} 업로드 실패: ${uploadError.message}`
+          );
+
+          continue;
+        }
+
+        const {
+          error: insertError,
+        } = await supabase
+          .from("memory_photos")
+          .insert({
+            memory_id:
+              selectedMemory.id,
+            file_path: filePath,
+            file_name:
+              file.name,
+            created_by:
+              myUserId,
+          });
+
+        if (insertError) {
+          console.error(
+            "사진 정보 저장 오류:",
+            insertError
+          );
+
+          await supabase.storage
+            .from(PHOTO_BUCKET)
+            .remove([filePath]);
+
+          alert(
+            `${file.name} 정보 저장 실패: ${insertError.message}`
+          );
+        }
+      }
+
+      await loadPhotos(
         selectedMemory.id
       );
 
-    if (photoPaths.length > 0) {
-      const { error: photoError } =
-        await supabase.storage
-          .from(PHOTO_BUCKET)
-          .remove(photoPaths);
-
-      if (photoError) {
-        console.error(
-          "사진 삭제 오류:",
-          photoError
-        );
-      }
+      setPhotoInputKey(
+        (value) => value + 1
+      );
+    } finally {
+      setUploadingPhoto(false);
     }
+  }
+
+  async function deletePhoto(
+    photo: PhotoWithUrl
+  ) {
+    const confirmed =
+      window.confirm(
+        "이 사진을 삭제할까요?"
+      );
+
+    if (!confirmed) return;
+
+    const {
+      error: storageError,
+    } = await supabase.storage
+      .from(PHOTO_BUCKET)
+      .remove([
+        photo.file_path,
+      ]);
+
+    if (storageError) {
+      console.error(
+        "Storage 사진 삭제 오류:",
+        storageError
+      );
+    }
+
+    const {
+      error: dbError,
+    } = await supabase
+      .from("memory_photos")
+      .delete()
+      .eq(
+        "id",
+        photo.id
+      );
+
+    if (dbError) {
+      alert(
+        "사진 정보 삭제 실패: " +
+          dbError.message
+      );
+      return;
+    }
+
+    if (selectedMemory) {
+      await loadPhotos(
+        selectedMemory.id
+      );
+    }
+  }
+
+  async function deleteMemoryPhotos(
+    memoryId: string
+  ) {
+    const { data, error } =
+      await supabase
+        .from("memory_photos")
+        .select("file_path")
+        .eq(
+          "memory_id",
+          memoryId
+        );
+
+    if (error) {
+      console.error(
+        "사진 목록 삭제 조회 오류:",
+        error
+      );
+      return;
+    }
+
+    if (data && data.length > 0) {
+      const paths = data.map(
+        (photo) =>
+          photo.file_path
+      );
+
+      await supabase.storage
+        .from(PHOTO_BUCKET)
+        .remove(paths);
+    }
+
+    await supabase
+      .from("memory_photos")
+      .delete()
+      .eq(
+        "memory_id",
+        memoryId
+      );
+  }
+
+  async function deleteMemory() {
+    if (!selectedMemory) return;
+
+    const confirmed =
+      window.confirm(
+        "이 메모를 삭제할까요?"
+      );
+
+    if (!confirmed) return;
+
+    await deleteMemoryPhotos(
+      selectedMemory.id
+    );
 
     const { error } =
       await supabase
@@ -812,6 +862,7 @@ export default function MemoriesPage() {
 
     setSelectedMemory(null);
     setIsCreating(false);
+    setIsEditing(false);
     setTitle("");
     setContent("");
     setPhotos([]);
@@ -853,6 +904,7 @@ export default function MemoriesPage() {
     <main className="min-h-screen bg-[#eaf6fc] text-[#3d3532]">
       <div className="mx-auto flex min-h-screen max-w-7xl flex-col px-4 py-5 md:px-8">
 
+        {/* HEADER */}
         <header className="mb-5 flex items-center justify-between">
           <div>
             <button
@@ -888,8 +940,10 @@ export default function MemoriesPage() {
           </div>
         </header>
 
+        {/* DESKTOP */}
         <div className="hidden min-h-[720px] flex-1 overflow-hidden rounded-3xl bg-white/90 shadow-sm md:flex">
 
+          {/* PARTS */}
           <aside className="w-56 shrink-0 border-r border-[#d4e8f2] bg-[#f7fcff]">
             <div className="flex h-full flex-col">
 
@@ -1014,6 +1068,7 @@ export default function MemoriesPage() {
             </div>
           </aside>
 
+          {/* MEMORY LIST */}
           <aside className="w-72 shrink-0 border-r border-[#d4e8f2] bg-white">
             <div className="flex h-full flex-col">
 
@@ -1058,7 +1113,8 @@ export default function MemoriesPage() {
                       </p>
                     </div>
                   </div>
-                ) : selectedPartMemories.length === 0 ? (
+                ) : selectedPartMemories.length ===
+                  0 ? (
                   <div className="flex min-h-[400px] items-center justify-center text-center">
                     <div>
                       <div className="text-4xl">
@@ -1133,7 +1189,9 @@ export default function MemoriesPage() {
             </div>
           </aside>
 
+          {/* CONTENT */}
           <section className="min-w-0 flex-1 bg-white">
+
             {!selectedPart ? (
               <div className="flex h-full min-h-[650px] items-center justify-center text-center">
                 <div>
@@ -1153,11 +1211,14 @@ export default function MemoriesPage() {
                   </p>
                 </div>
               </div>
-            ) : isCreating ||
-              selectedMemory ? (
+
+            ) : isCreating || selectedMemory ? (
+
               <div className="flex h-full flex-col">
 
+                {/* CONTENT HEADER */}
                 <div className="flex items-center justify-between border-b border-[#d4e8f2] px-8 py-4">
+
                   <div className="flex min-w-0 items-center gap-2 text-xs text-[#8b9fa9]">
                     <span>📁</span>
 
@@ -1175,14 +1236,30 @@ export default function MemoriesPage() {
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={
-                        cancelMemory
-                      }
-                      className="rounded-lg px-3 py-2 text-xs font-semibold text-[#8b9fa9] hover:bg-[#edf8fc]"
-                    >
-                      취소
-                    </button>
+
+                    {selectedMemory &&
+                      !isEditing && (
+                        <button
+                          onClick={
+                            startEditing
+                          }
+                          className="rounded-lg bg-[#dff2fb] px-4 py-2 text-xs font-semibold text-[#456572] hover:bg-[#ccebf7]"
+                        >
+                          수정
+                        </button>
+                      )}
+
+                    {(isEditing ||
+                      isCreating) && (
+                      <button
+                        onClick={
+                          cancelMemory
+                        }
+                        className="rounded-lg px-3 py-2 text-xs font-semibold text-[#8b9fa9] hover:bg-[#edf8fc]"
+                      >
+                        취소
+                      </button>
+                    )}
 
                     {selectedMemory && (
                       <button
@@ -1194,9 +1271,11 @@ export default function MemoriesPage() {
                         삭제
                       </button>
                     )}
+
                   </div>
                 </div>
 
+                {/* CONTENT */}
                 <div className="flex flex-1 flex-col overflow-y-auto px-8 py-10 lg:px-14">
 
                   <div className="mb-2 text-xs text-[#9eb0b9]">
@@ -1209,162 +1288,211 @@ export default function MemoriesPage() {
                       : `${myName} · 지금 작성`}
                   </div>
 
-                  <input
-                    autoFocus={isCreating}
-                    value={title}
-                    onChange={(e) =>
-                      setTitle(
-                        e.target.value
-                      )
-                    }
-                    placeholder="제목 없음"
-                    className="w-full border-0 bg-transparent text-4xl font-bold tracking-tight text-[#3d3532] outline-none placeholder:text-[#d8e4e9]"
-                  />
-
-                  <div className="my-7 h-px bg-[#d4e8f2]" />
-
-                  <textarea
-                    value={content}
-                    onChange={(e) =>
-                      setContent(
-                        e.target.value
-                      )
-                    }
-                    placeholder="기억하고 싶은 이야기를 자유롭게 적어보세요..."
-                    className="min-h-[300px] w-full resize-none border-0 bg-transparent text-[15px] leading-8 text-[#554b47] outline-none placeholder:text-[#b7c8cf]"
-                  />
-
-                  {photos.length > 0 && (
-                    <div className="mt-8">
-                      <p className="mb-3 text-xs font-semibold text-[#78909a]">
-                        사진
-                      </p>
-
-                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-                        {photos.map(
-                          (photo) => (
-                            <div
-                              key={
-                                photo.path
-                              }
-                              className="group relative overflow-hidden rounded-2xl bg-[#f4f9fb]"
-                            >
-                              <img
-                                src={
-                                  photo.url
-                                }
-                                alt="Memory photo"
-                                className="aspect-square w-full object-cover"
-                              />
-
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  deletePhoto(
-                                    photo
-                                  )
-                                }
-                                className="absolute right-2 top-2 hidden rounded-lg bg-black/50 px-2 py-1 text-xs text-white group-hover:block"
-                              >
-                                삭제
-                              </button>
-                            </div>
+                  {isEditing ||
+                  isCreating ? (
+                    <>
+                      <input
+                        autoFocus={
+                          isCreating
+                        }
+                        value={title}
+                        onChange={(e) =>
+                          setTitle(
+                            e.target.value
                           )
-                        )}
+                        }
+                        placeholder="제목 없음"
+                        className="w-full border-0 bg-transparent text-4xl font-bold tracking-tight text-[#3d3532] outline-none placeholder:text-[#d8e4e9]"
+                      />
+
+                      <div className="my-7 h-px bg-[#d4e8f2]" />
+
+                      <textarea
+                        value={content}
+                        onChange={(e) =>
+                          setContent(
+                            e.target.value
+                          )
+                        }
+                        placeholder="기억하고 싶은 이야기를 자유롭게 적어보세요..."
+                        className="min-h-[300px] w-full resize-none border-0 bg-transparent text-[15px] leading-8 text-[#554b47] outline-none placeholder:text-[#b7c8cf]"
+                      />
+
+                      {/* PHOTO UPLOAD */}
+                      {selectedMemory && (
+                        <div className="mt-8">
+
+                          <div className="mb-3 flex items-center justify-between">
+                            <p className="text-sm font-semibold text-[#554b47]">
+                              사진
+                            </p>
+
+                            <label className="cursor-pointer rounded-xl bg-[#dff2fb] px-4 py-2 text-xs font-semibold text-[#456572] hover:bg-[#ccebf7]">
+                              {uploadingPhoto
+                                ? "업로드 중..."
+                                : "+ 사진 추가"}
+
+                              <input
+                                key={
+                                  photoInputKey
+                                }
+                                type="file"
+                                accept="image/*"
+                                multiple
+                                className="hidden"
+                                disabled={
+                                  uploadingPhoto
+                                }
+                                onChange={(
+                                  e
+                                ) => {
+                                  if (
+                                    e.target
+                                      .files
+                                  ) {
+                                    uploadPhotos(
+                                      e.target
+                                        .files
+                                    );
+                                  }
+                                }}
+                              />
+                            </label>
+                          </div>
+
+                          {photos.length >
+                            0 && (
+                            <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+                              {photos.map(
+                                (photo) => (
+                                  <div
+                                    key={
+                                      photo.id
+                                    }
+                                    className="group relative overflow-hidden rounded-2xl bg-[#f4f9fb]"
+                                  >
+                                    <img
+                                      src={
+                                        photo.url
+                                      }
+                                      alt={
+                                        photo.file_name
+                                      }
+                                      className="aspect-square w-full object-cover"
+                                    />
+
+                                    <button
+                                      onClick={() =>
+                                        deletePhoto(
+                                          photo
+                                        )
+                                      }
+                                      className="absolute right-2 top-2 rounded-lg bg-black/60 px-2 py-1 text-xs text-white opacity-0 transition group-hover:opacity-100"
+                                    >
+                                      삭제
+                                    </button>
+                                  </div>
+                                )
+                              )}
+                            </div>
+                          )}
+
+                          {photos.length ===
+                            0 && (
+                            <div className="rounded-2xl border border-dashed border-[#cfe4ed] px-4 py-8 text-center text-xs text-[#9eb0b9]">
+                              아직 사진이 없어요.
+                              <br />
+                              위의 사진 추가 버튼으로
+                              사진을 넣어보세요.
+                            </div>
+                          )}
+
+                        </div>
+                      )}
+
+                      <div className="mt-8 flex items-center justify-between border-t border-[#d4e8f2] pt-5">
+                        <p className="text-xs text-[#9eb0b9]">
+                          {selectedPart.name}
+                        </p>
+
+                        <button
+                          onClick={
+                            saveMemory
+                          }
+                          disabled={saving}
+                          className="rounded-xl bg-[#dff2fb] px-6 py-3 text-sm font-semibold text-[#456572] transition hover:bg-[#ccebf7] disabled:opacity-50"
+                        >
+                          {saving
+                            ? "저장 중..."
+                            : "저장"}
+                        </button>
                       </div>
-                    </div>
+                    </>
+                  ) : (
+                    <>
+                      {/* READ ONLY VIEW */}
+                      <h2 className="text-4xl font-bold tracking-tight text-[#3d3532]">
+                        {selectedMemory?.title}
+                      </h2>
+
+                      <div className="my-7 h-px bg-[#d4e8f2]" />
+
+                      <div className="whitespace-pre-wrap text-[15px] leading-8 text-[#554b47]">
+                        {selectedMemory?.content ||
+                          "내용 없음"}
+                      </div>
+
+                      {/* PHOTOS */}
+                      {photos.length >
+                        0 && (
+                        <div className="mt-10">
+
+                          <p className="mb-4 text-sm font-semibold text-[#554b47]">
+                            사진
+                          </p>
+
+                          <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+                            {photos.map(
+                              (photo) => (
+                                <a
+                                  key={
+                                    photo.id
+                                  }
+                                  href={
+                                    photo.url
+                                  }
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="block overflow-hidden rounded-2xl bg-[#f4f9fb]"
+                                >
+                                  <img
+                                    src={
+                                      photo.url
+                                    }
+                                    alt={
+                                      photo.file_name
+                                    }
+                                    className="aspect-square w-full object-cover transition hover:scale-[1.02]"
+                                  />
+                                </a>
+                              )
+                            )}
+                          </div>
+
+                        </div>
+                      )}
+
+                      <div className="mt-10 border-t border-[#d4e8f2] pt-5">
+                        <p className="text-xs text-[#9eb0b9]">
+                          {selectedPart.name}
+                        </p>
+                      </div>
+                    </>
                   )}
 
-                  {previewFiles.length > 0 && (
-                    <div className="mt-6">
-                      <p className="mb-3 text-xs font-semibold text-[#78909a]">
-                        추가할 사진
-                      </p>
-
-                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-                        {previewFiles.map(
-                          (item, index) => (
-                            <div
-                              key={`${item.file.name}-${index}`}
-                              className="group relative overflow-hidden rounded-2xl bg-[#f4f9fb]"
-                            >
-                              <img
-                                src={
-                                  item.url
-                                }
-                                alt="Preview"
-                                className="aspect-square w-full object-cover"
-                              />
-
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  removePreviewFile(
-                                    index
-                                  )
-                                }
-                                className="absolute right-2 top-2 rounded-lg bg-black/50 px-2 py-1 text-xs text-white"
-                              >
-                                ×
-                              </button>
-                            </div>
-                          )
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="mt-6 flex flex-wrap items-center gap-3">
-                    <input
-                      ref={photoInputRef}
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      onChange={
-                        handlePhotoSelect
-                      }
-                      className="hidden"
-                    />
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        photoInputRef.current?.click()
-                      }
-                      className="rounded-xl border border-[#c9e2ed] bg-[#f7fcff] px-4 py-2.5 text-xs font-semibold text-[#587582] transition hover:bg-[#eaf6fc]"
-                    >
-                      📷 사진 추가
-                    </button>
-
-                    <p className="text-[11px] text-[#a3b4bc]">
-                      JPG, PNG, WEBP · 최대 10MB
-                    </p>
-                  </div>
-
-                  <div className="mt-6 flex items-center justify-between border-t border-[#d4e8f2] pt-5">
-                    <p className="text-xs text-[#9eb0b9]">
-                      {selectedPart.name}
-                    </p>
-
-                    <button
-                      onClick={
-                        saveMemory
-                      }
-                      disabled={
-                        saving ||
-                        uploadingPhotos
-                      }
-                      className="rounded-xl bg-[#dff2fb] px-6 py-3 text-sm font-semibold text-[#456572] transition hover:bg-[#ccebf7] disabled:opacity-50"
-                    >
-                      {uploadingPhotos
-                        ? "사진 업로드 중..."
-                        : saving
-                        ? "저장 중..."
-                        : "저장"}
-                    </button>
-                  </div>
                 </div>
               </div>
+
             ) : (
               <div className="flex h-full min-h-[650px] items-center justify-center text-center">
                 <div>
@@ -1396,6 +1524,7 @@ export default function MemoriesPage() {
           </section>
         </div>
 
+        {/* MOBILE */}
         <div className="md:hidden">
 
           <div className="rounded-2xl bg-white/90 p-4 shadow-sm">
@@ -1525,187 +1654,250 @@ export default function MemoriesPage() {
                     <div>
                       <p className="text-xs text-[#8b9fa9]">
                         {selectedMemory
-                          ? "EDIT MEMORY"
+                          ? isEditing
+                            ? "EDIT MEMORY"
+                            : "VIEW MEMORY"
                           : "NEW MEMORY"}
                       </p>
 
                       <h2 className="mt-1 text-xl font-bold">
                         {selectedMemory
-                          ? "메모 수정"
+                          ? isEditing
+                            ? "메모 수정"
+                            : "메모"
                           : "새 메모"}
                       </h2>
                     </div>
 
-                    {selectedMemory && (
-                      <button
-                        onClick={
-                          deleteMemory
+                    <div className="flex gap-2">
+
+                      {selectedMemory &&
+                        !isEditing && (
+                          <button
+                            onClick={
+                              startEditing
+                            }
+                            className="rounded-lg bg-[#dff2fb] px-3 py-2 text-xs font-semibold text-[#456572]"
+                          >
+                            수정
+                          </button>
+                        )}
+
+                      {selectedMemory && (
+                        <button
+                          onClick={
+                            deleteMemory
+                          }
+                          className="rounded-lg bg-[#fff1f1] px-3 py-2 text-xs font-semibold text-red-400"
+                        >
+                          삭제
+                        </button>
+                      )}
+
+                    </div>
+                  </div>
+
+                  {isEditing ||
+                  isCreating ? (
+                    <>
+                      <input
+                        autoFocus
+                        value={title}
+                        onChange={(e) =>
+                          setTitle(
+                            e.target.value
+                          )
                         }
-                        className="rounded-lg bg-[#fff1f1] px-3 py-2 text-xs font-semibold text-red-400"
-                      >
-                        삭제
-                      </button>
-                    )}
-                  </div>
+                        placeholder="제목을 입력해주세요"
+                        className="w-full border-0 bg-transparent text-2xl font-bold text-[#3d3532] outline-none placeholder:text-[#c7d5db]"
+                      />
 
-                  <input
-                    autoFocus
-                    value={title}
-                    onChange={(e) =>
-                      setTitle(
-                        e.target.value
-                      )
-                    }
-                    placeholder="제목을 입력해주세요"
-                    className="w-full border-0 bg-transparent text-2xl font-bold text-[#3d3532] outline-none placeholder:text-[#c7d5db]"
-                  />
+                      <div className="my-4 h-px bg-[#d4e8f2]" />
 
-                  <div className="my-4 h-px bg-[#d4e8f2]" />
-
-                  <textarea
-                    value={content}
-                    onChange={(e) =>
-                      setContent(
-                        e.target.value
-                      )
-                    }
-                    placeholder="기억하고 싶은 이야기를 자유롭게 적어보세요..."
-                    className="min-h-[300px] w-full resize-none border-0 bg-transparent text-sm leading-7 text-[#554b47] outline-none placeholder:text-[#b7c8cf]"
-                  />
-
-                  {photos.length > 0 && (
-                    <div className="mt-6">
-                      <p className="mb-3 text-xs font-semibold text-[#78909a]">
-                        사진
-                      </p>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        {photos.map(
-                          (photo) => (
-                            <div
-                              key={
-                                photo.path
-                              }
-                              className="group relative overflow-hidden rounded-2xl"
-                            >
-                              <img
-                                src={
-                                  photo.url
-                                }
-                                alt="Memory photo"
-                                className="aspect-square w-full object-cover"
-                              />
-
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  deletePhoto(
-                                    photo
-                                  )
-                                }
-                                className="absolute right-2 top-2 rounded-lg bg-black/50 px-2 py-1 text-xs text-white"
-                              >
-                                삭제
-                              </button>
-                            </div>
+                      <textarea
+                        value={content}
+                        onChange={(e) =>
+                          setContent(
+                            e.target.value
                           )
-                        )}
+                        }
+                        placeholder="기억하고 싶은 이야기를 자유롭게 적어보세요..."
+                        className="min-h-[300px] w-full resize-none border-0 bg-transparent text-sm leading-7 text-[#554b47] outline-none placeholder:text-[#b7c8cf]"
+                      />
+
+                      {selectedMemory && (
+                        <div className="mt-6">
+
+                          <div className="mb-3 flex items-center justify-between">
+                            <p className="text-sm font-semibold text-[#554b47]">
+                              사진
+                            </p>
+
+                            <label className="cursor-pointer rounded-lg bg-[#dff2fb] px-3 py-2 text-xs font-semibold text-[#456572]">
+                              {uploadingPhoto
+                                ? "업로드 중..."
+                                : "+ 사진 추가"}
+
+                              <input
+                                key={
+                                  photoInputKey
+                                }
+                                type="file"
+                                accept="image/*"
+                                multiple
+                                className="hidden"
+                                disabled={
+                                  uploadingPhoto
+                                }
+                                onChange={(
+                                  e
+                                ) => {
+                                  if (
+                                    e.target
+                                      .files
+                                  ) {
+                                    uploadPhotos(
+                                      e.target
+                                        .files
+                                    );
+                                  }
+                                }}
+                              />
+                            </label>
+                          </div>
+
+                          {photos.length >
+                            0 && (
+                            <div className="grid grid-cols-2 gap-2">
+                              {photos.map(
+                                (photo) => (
+                                  <div
+                                    key={
+                                      photo.id
+                                    }
+                                    className="relative overflow-hidden rounded-xl"
+                                  >
+                                    <img
+                                      src={
+                                        photo.url
+                                      }
+                                      alt={
+                                        photo.file_name
+                                      }
+                                      className="aspect-square w-full object-cover"
+                                    />
+
+                                    <button
+                                      onClick={() =>
+                                        deletePhoto(
+                                          photo
+                                        )
+                                      }
+                                      className="absolute right-2 top-2 rounded-lg bg-black/60 px-2 py-1 text-xs text-white"
+                                    >
+                                      삭제
+                                    </button>
+                                  </div>
+                                )
+                              )}
+                            </div>
+                          )}
+
+                        </div>
+                      )}
+
+                      <div className="mt-5 flex gap-2 border-t border-[#d4e8f2] pt-5">
+
+                        <button
+                          onClick={
+                            cancelMemory
+                          }
+                          className="flex-1 rounded-xl bg-[#f2f7f9] py-3 text-sm font-semibold text-[#78909a]"
+                        >
+                          취소
+                        </button>
+
+                        <button
+                          onClick={
+                            saveMemory
+                          }
+                          disabled={saving}
+                          className="flex-1 rounded-xl bg-[#dff2fb] py-3 text-sm font-semibold text-[#456572] disabled:opacity-50"
+                        >
+                          {saving
+                            ? "저장 중..."
+                            : "저장"}
+                        </button>
+
                       </div>
-                    </div>
+                    </>
+                  ) : (
+                    <>
+                      <h2 className="text-2xl font-bold text-[#3d3532]">
+                        {selectedMemory?.title}
+                      </h2>
+
+                      <div className="my-4 h-px bg-[#d4e8f2]" />
+
+                      <div className="whitespace-pre-wrap text-sm leading-7 text-[#554b47]">
+                        {selectedMemory?.content ||
+                          "내용 없음"}
+                      </div>
+
+                      {photos.length >
+                        0 && (
+                        <div className="mt-7">
+
+                          <p className="mb-3 text-sm font-semibold">
+                            사진
+                          </p>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            {photos.map(
+                              (photo) => (
+                                <a
+                                  key={
+                                    photo.id
+                                  }
+                                  href={
+                                    photo.url
+                                  }
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="overflow-hidden rounded-xl"
+                                >
+                                  <img
+                                    src={
+                                      photo.url
+                                    }
+                                    alt={
+                                      photo.file_name
+                                    }
+                                    className="aspect-square w-full object-cover"
+                                  />
+                                </a>
+                              )
+                            )}
+                          </div>
+
+                        </div>
+                      )}
+
+                      <div className="mt-6 flex gap-2 border-t border-[#d4e8f2] pt-5">
+
+                        <button
+                          onClick={
+                            startEditing
+                          }
+                          className="flex-1 rounded-xl bg-[#dff2fb] py-3 text-sm font-semibold text-[#456572]"
+                        >
+                          수정
+                        </button>
+
+                      </div>
+                    </>
                   )}
 
-                  {previewFiles.length > 0 && (
-                    <div className="mt-5">
-                      <p className="mb-3 text-xs font-semibold text-[#78909a]">
-                        추가할 사진
-                      </p>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        {previewFiles.map(
-                          (item, index) => (
-                            <div
-                              key={`${item.file.name}-${index}`}
-                              className="relative overflow-hidden rounded-2xl"
-                            >
-                              <img
-                                src={
-                                  item.url
-                                }
-                                alt="Preview"
-                                className="aspect-square w-full object-cover"
-                              />
-
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  removePreviewFile(
-                                    index
-                                  )
-                                }
-                                className="absolute right-2 top-2 rounded-lg bg-black/50 px-2 py-1 text-xs text-white"
-                              >
-                                ×
-                              </button>
-                            </div>
-                          )
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  <input
-                    ref={photoInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    onChange={
-                      handlePhotoSelect
-                    }
-                    className="hidden"
-                  />
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      photoInputRef.current?.click()
-                    }
-                    className="mt-5 w-full rounded-xl border border-[#c9e2ed] bg-[#f7fcff] py-3 text-sm font-semibold text-[#587582]"
-                  >
-                    📷 사진 추가
-                  </button>
-
-                  <p className="mt-2 text-center text-[11px] text-[#a3b4bc]">
-                    JPG, PNG, WEBP · 사진 1장당 최대 10MB
-                  </p>
-
-                  <div className="mt-5 flex gap-2 border-t border-[#d4e8f2] pt-5">
-
-                    <button
-                      onClick={
-                        cancelMemory
-                      }
-                      className="flex-1 rounded-xl bg-[#f2f7f9] py-3 text-sm font-semibold text-[#78909a]"
-                    >
-                      취소
-                    </button>
-
-                    <button
-                      onClick={
-                        saveMemory
-                      }
-                      disabled={
-                        saving ||
-                        uploadingPhotos
-                      }
-                      className="flex-1 rounded-xl bg-[#dff2fb] py-3 text-sm font-semibold text-[#456572] disabled:opacity-50"
-                    >
-                      {uploadingPhotos
-                        ? "업로드 중..."
-                        : saving
-                        ? "저장 중..."
-                        : "저장"}
-                    </button>
-                  </div>
                 </div>
               )}
             </>
@@ -1713,6 +1905,7 @@ export default function MemoriesPage() {
         </div>
       </div>
 
+      {/* PART MODAL */}
       {showPartModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-5"
@@ -1801,6 +1994,7 @@ export default function MemoriesPage() {
                   ? "수정"
                   : "만들기"}
               </button>
+
             </div>
           </div>
         </div>
@@ -1808,3 +2002,4 @@ export default function MemoriesPage() {
     </main>
   );
 }
+
