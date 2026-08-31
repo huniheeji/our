@@ -1,3 +1,4 @@
+```tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -30,24 +31,22 @@ type MemoryPhoto = {
   created_at: string;
 };
 
-type PhotoPreview = {
-  id?: string;
-  file?: File;
-  file_path?: string;
-  file_name: string;
-  preview_url: string;
-  existing: boolean;
+type PendingPhoto = {
+  id: string;
+  file: File;
+  previewUrl: string;
 };
 
 const YOUNGHUN_ID = "c2e77c6f-0c9a-403c-a66d-234e021357b0";
 const HEEJI_ID = "92dac467-922d-4ef4-b353-eb84593d9761";
 
-const STORAGE_BUCKET = "memory-photos";
+const PHOTO_BUCKET = "memory-photos";
 
 export default function MemoriesPage() {
   const [parts, setParts] = useState<MemoryPart[]>([]);
   const [memories, setMemories] = useState<Memory[]>([]);
-  const [memoryPhotos, setMemoryPhotos] = useState<MemoryPhoto[]>([]);
+  const [photos, setPhotos] = useState<MemoryPhoto[]>([]);
+  const [pendingPhotos, setPendingPhotos] = useState<PendingPhoto[]>([]);
 
   const [selectedPart, setSelectedPart] =
     useState<MemoryPart | null>(null);
@@ -71,17 +70,21 @@ export default function MemoriesPage() {
   const [showPartModal, setShowPartModal] =
     useState(false);
 
-  const [isCreating, setIsCreating] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
+  const [isCreating, setIsCreating] =
+    useState(false);
 
-  const [photos, setPhotos] = useState<PhotoPreview[]>([]);
-  const [uploadingPhoto, setUploadingPhoto] =
+  const [isEditing, setIsEditing] =
+    useState(false);
+
+  const [photoLoading, setPhotoLoading] =
     useState(false);
 
   useEffect(() => {
     let mounted = true;
-    let channel: ReturnType<typeof supabase.channel> | null =
-      null;
+
+    let channel:
+      | ReturnType<typeof supabase.channel>
+      | null = null;
 
     async function initialize() {
       const {
@@ -111,6 +114,7 @@ export default function MemoriesPage() {
 
       channel = supabase
         .channel("memories-page-realtime")
+
         .on(
           "postgres_changes",
           {
@@ -120,9 +124,9 @@ export default function MemoriesPage() {
           },
           async () => {
             await loadMemories();
-            await loadMemoryPhotos();
           }
         )
+
         .on(
           "postgres_changes",
           {
@@ -134,6 +138,7 @@ export default function MemoriesPage() {
             await loadParts();
           }
         )
+
         .on(
           "postgres_changes",
           {
@@ -142,9 +147,10 @@ export default function MemoriesPage() {
             table: "memory_photos",
           },
           async () => {
-            await loadMemoryPhotos();
+            await loadPhotos();
           }
         )
+
         .subscribe();
 
       setLoading(false);
@@ -165,7 +171,7 @@ export default function MemoriesPage() {
     await Promise.all([
       loadParts(),
       loadMemories(),
-      loadMemoryPhotos(),
+      loadPhotos(),
     ]);
   }
 
@@ -230,12 +236,7 @@ export default function MemoriesPage() {
         return null;
       }
 
-      /*
-       * 읽기/수정 중에 실시간 업데이트가 들어오더라도
-       * 사용자가 입력 중인 내용을 강제로 덮어쓰지 않도록
-       * 보기 모드일 때만 값을 갱신합니다.
-       */
-      if (!isEditing && !isCreating) {
+      if (!isEditing) {
         setTitle(updated.title);
         setContent(updated.content);
       }
@@ -244,7 +245,7 @@ export default function MemoriesPage() {
     });
   }
 
-  async function loadMemoryPhotos() {
+  async function loadPhotos() {
     const { data, error } = await supabase
       .from("memory_photos")
       .select("*")
@@ -253,14 +254,11 @@ export default function MemoriesPage() {
       });
 
     if (error) {
-      console.error(
-        "사진 정보 조회 오류:",
-        error
-      );
+      console.error("사진 조회 오류:", error);
       return;
     }
 
-    setMemoryPhotos(data || []);
+    setPhotos(data || []);
   }
 
   function getAuthorName(
@@ -295,7 +293,7 @@ export default function MemoriesPage() {
   function getMemoryPhotos(
     memoryId: string
   ) {
-    return memoryPhotos.filter(
+    return photos.filter(
       (photo) =>
         photo.memory_id === memoryId
     );
@@ -304,11 +302,10 @@ export default function MemoriesPage() {
   function getPhotoUrl(
     filePath: string
   ) {
-    const {
-      data,
-    } = supabase.storage
-      .from(STORAGE_BUCKET)
-      .getPublicUrl(filePath);
+    const { data } =
+      supabase.storage
+        .from(PHOTO_BUCKET)
+        .getPublicUrl(filePath);
 
     return data.publicUrl;
   }
@@ -320,30 +317,21 @@ export default function MemoriesPage() {
     setIsEditing(false);
     setTitle("");
     setContent("");
-    setPhotos([]);
+    setPendingPhotos([]);
   }
 
   function selectMemory(memory: Memory) {
     setSelectedMemory(memory);
+
     setIsCreating(false);
+
+    // 메모를 클릭했을 때 바로 수정되지 않음
     setIsEditing(false);
+
     setTitle(memory.title);
     setContent(memory.content);
 
-    const existingPhotos =
-      getMemoryPhotos(memory.id).map(
-        (photo) => ({
-          id: photo.id,
-          file_path: photo.file_path,
-          file_name: photo.file_name,
-          preview_url: getPhotoUrl(
-            photo.file_path
-          ),
-          existing: true,
-        })
-      );
-
-    setPhotos(existingPhotos);
+    setPendingPhotos([]);
   }
 
   function createNewMemory() {
@@ -357,9 +345,10 @@ export default function MemoriesPage() {
     setSelectedMemory(null);
     setIsCreating(true);
     setIsEditing(true);
+
     setTitle("");
     setContent("");
-    setPhotos([]);
+    setPendingPhotos([]);
   }
 
   function startEditing() {
@@ -368,55 +357,23 @@ export default function MemoriesPage() {
     setIsEditing(true);
     setTitle(selectedMemory.title);
     setContent(selectedMemory.content);
-
-    const existingPhotos =
-      getMemoryPhotos(
-        selectedMemory.id
-      ).map((photo) => ({
-        id: photo.id,
-        file_path: photo.file_path,
-        file_name: photo.file_name,
-        preview_url: getPhotoUrl(
-          photo.file_path
-        ),
-        existing: true,
-      }));
-
-    setPhotos(existingPhotos);
+    setPendingPhotos([]);
   }
 
   function cancelMemory() {
-    if (isCreating) {
-      setSelectedMemory(null);
-      setIsCreating(false);
-      setIsEditing(false);
-      setTitle("");
-      setContent("");
-      setPhotos([]);
-      return;
-    }
+    setIsCreating(false);
+    setIsEditing(false);
+
+    setPendingPhotos([]);
 
     if (selectedMemory) {
       setTitle(selectedMemory.title);
       setContent(selectedMemory.content);
-
-      const existingPhotos =
-        getMemoryPhotos(
-          selectedMemory.id
-        ).map((photo) => ({
-          id: photo.id,
-          file_path: photo.file_path,
-          file_name: photo.file_name,
-          preview_url: getPhotoUrl(
-            photo.file_path
-          ),
-          existing: true,
-        }));
-
-      setPhotos(existingPhotos);
+    } else {
+      setSelectedMemory(null);
+      setTitle("");
+      setContent("");
     }
-
-    setIsEditing(false);
   }
 
   function openNewPartModal() {
@@ -509,31 +466,48 @@ export default function MemoriesPage() {
 
     if (!confirmed) return;
 
-    /*
-     * 파트 안의 메모 사진도 먼저 삭제
-     */
-    for (const memory of partMemories) {
-      const photosToDelete =
-        getMemoryPhotos(memory.id);
+    if (partMemories.length > 0) {
+      const memoryIds =
+        partMemories.map(
+          (memory) => memory.id
+        );
 
-      for (const photo of photosToDelete) {
+      const partPhotos =
+        photos.filter((photo) =>
+          memoryIds.includes(
+            photo.memory_id
+          )
+        );
+
+      if (partPhotos.length > 0) {
+        const filePaths =
+          partPhotos.map(
+            (photo) =>
+              photo.file_path
+          );
+
         await supabase.storage
-          .from(STORAGE_BUCKET)
-          .remove([photo.file_path]);
+          .from(PHOTO_BUCKET)
+          .remove(filePaths);
       }
 
-      if (photosToDelete.length > 0) {
+      const { error: photoError } =
         await supabase
           .from("memory_photos")
           .delete()
-          .eq(
+          .in(
             "memory_id",
-            memory.id
+            memoryIds
           );
-      }
-    }
 
-    if (partMemories.length > 0) {
+      if (photoError) {
+        alert(
+          "사진 정보 삭제 실패: " +
+            photoError.message
+        );
+        return;
+      }
+
       const { error } =
         await supabase
           .from("memories")
@@ -575,15 +549,12 @@ export default function MemoriesPage() {
     setIsEditing(false);
     setTitle("");
     setContent("");
-    setPhotos([]);
+    setPendingPhotos([]);
 
     await loadData();
   }
 
-  /*
-   * 사진 선택
-   */
-  async function handlePhotoSelect(
+  function handlePhotoSelect(
     event: React.ChangeEvent<HTMLInputElement>
   ) {
     const files =
@@ -593,193 +564,282 @@ export default function MemoriesPage() {
       return;
     }
 
-    if (!myUserId) {
-      alert(
-        "로그인 정보를 확인할 수 없습니다."
-      );
-      return;
-    }
+    const selectedFiles =
+      Array.from(files);
 
-    setUploadingPhoto(true);
-
-    try {
-      const selectedFiles =
-        Array.from(files);
-
-      const newPhotos: PhotoPreview[] =
-        [];
-
-      for (const file of selectedFiles) {
-        if (!file.type.startsWith("image/")) {
-          alert(
-            `${file.name}은(는) 이미지 파일이 아닙니다.`
-          );
-          continue;
-        }
-
-        /*
-         * 파일명 중복 방지
-         */
-        const extension =
-          file.name.split(".").pop() ||
-          "jpg";
-
-        const safeFileName =
-          `${Date.now()}-${Math.random()
-            .toString(36)
-            .substring(2, 10)}.${extension}`;
-
-        /*
-         * 로그인 사용자별 폴더
-         */
-        const filePath =
-          `${myUserId}/${safeFileName}`;
-
-        const {
-          error,
-        } = await supabase.storage
-          .from(STORAGE_BUCKET)
-          .upload(
-            filePath,
-            file,
-            {
-              cacheControl: "3600",
-              upsert: false,
-              contentType: file.type,
-            }
-          );
-
-        if (error) {
-          console.error(
-            "사진 업로드 오류:",
-            error
-          );
-
-          alert(
-            `${file.name} 업로드 실패\n${error.message}`
-          );
-
-          continue;
-        }
-
-        const {
-          data: publicUrlData,
-        } =
-          supabase.storage
-            .from(STORAGE_BUCKET)
-            .getPublicUrl(
-              filePath
+    const validFiles =
+      selectedFiles.filter(
+        (file) => {
+          if (
+            !file.type.startsWith(
+              "image/"
+            )
+          ) {
+            alert(
+              `${file.name}은(는) 이미지 파일이 아닙니다.`
             );
+            return false;
+          }
 
-        newPhotos.push({
-          file_path: filePath,
-          file_name: file.name,
-          preview_url:
-            publicUrlData.publicUrl,
-          existing: false,
-        });
-      }
+          if (
+            file.size >
+            10 * 1024 * 1024
+          ) {
+            alert(
+              `${file.name}의 용량이 10MB를 초과합니다.`
+            );
+            return false;
+          }
 
-      setPhotos((current) => [
+          return true;
+        }
+      );
+
+    const newPhotos =
+      validFiles.map(
+        (file) => ({
+          id:
+            crypto.randomUUID(),
+          file,
+          previewUrl:
+            URL.createObjectURL(
+              file
+            ),
+        })
+      );
+
+    setPendingPhotos(
+      (current) => [
         ...current,
         ...newPhotos,
-      ]);
-    } finally {
-      setUploadingPhoto(false);
+      ]
+    );
 
-      /*
-       * 같은 파일을 다시 선택할 수 있도록 초기화
-       */
-      event.target.value = "";
+    // 같은 파일을 다시 선택할 수 있도록 초기화
+    event.target.value = "";
+  }
+
+  function removePendingPhoto(
+    photoId: string
+  ) {
+    setPendingPhotos(
+      (current) => {
+        const target =
+          current.find(
+            (photo) =>
+              photo.id ===
+              photoId
+          );
+
+        if (target) {
+          URL.revokeObjectURL(
+            target.previewUrl
+          );
+        }
+
+        return current.filter(
+          (photo) =>
+            photo.id !== photoId
+        );
+      }
+    );
+  }
+
+  async function uploadPhotos(
+    memoryId: string
+  ) {
+    if (
+      pendingPhotos.length === 0
+    ) {
+      return true;
+    }
+
+    setPhotoLoading(true);
+
+    const uploadedPaths: string[] = [];
+
+    try {
+      for (
+        const pendingPhoto of pendingPhotos
+      ) {
+        const file =
+          pendingPhoto.file;
+
+        const originalName =
+          file.name;
+
+        const extension =
+          originalName.includes(".")
+            ? originalName
+                .split(".")
+                .pop()
+                ?.toLowerCase() || "jpg"
+            : "jpg";
+
+        const filePath =
+          `${myUserId}/${memoryId}/${crypto.randomUUID()}.${extension}`;
+
+        const {
+          error: uploadError,
+        } =
+          await supabase.storage
+            .from(PHOTO_BUCKET)
+            .upload(
+              filePath,
+              file,
+              {
+                cacheControl:
+                  "3600",
+                upsert: false,
+                contentType:
+                  file.type ||
+                  "image/jpeg",
+              }
+            );
+
+        if (uploadError) {
+          console.error(
+            "사진 업로드 오류:",
+            uploadError
+          );
+
+          // 앞에서 업로드된 파일 정리
+          if (
+            uploadedPaths.length >
+            0
+          ) {
+            await supabase.storage
+              .from(
+                PHOTO_BUCKET
+              )
+              .remove(
+                uploadedPaths
+              );
+          }
+
+          alert(
+            `사진 업로드 실패: ${uploadError.message}`
+          );
+
+          return false;
+        }
+
+        uploadedPaths.push(
+          filePath
+        );
+
+        const {
+          error: dbError,
+        } =
+          await supabase
+            .from(
+              "memory_photos"
+            )
+            .insert({
+              memory_id:
+                memoryId,
+              file_path:
+                filePath,
+              file_name:
+                originalName,
+              created_by:
+                myUserId,
+            });
+
+        if (dbError) {
+          console.error(
+            "사진 정보 저장 오류:",
+            dbError
+          );
+
+          await supabase.storage
+            .from(
+              PHOTO_BUCKET
+            )
+            .remove([
+              filePath,
+            ]);
+
+          // 앞에서 정상 저장된 사진들도 정리
+          if (
+            uploadedPaths.length >
+            1
+          ) {
+            await supabase.storage
+              .from(
+                PHOTO_BUCKET
+              )
+              .remove(
+                uploadedPaths.filter(
+                  (path) =>
+                    path !==
+                    filePath
+                )
+              );
+          }
+
+          alert(
+            `사진 정보 저장 실패: ${dbError.message}`
+          );
+
+          return false;
+        }
+      }
+
+      return true;
+    } finally {
+      setPhotoLoading(false);
     }
   }
 
-  /*
-   * 사진 삭제
-   */
-  async function removePhoto(
-    index: number
+  async function deletePhoto(
+    photo: MemoryPhoto
   ) {
-    const photo = photos[index];
+    if (!isEditing) return;
 
-    if (!photo) return;
+    const confirmed =
+      window.confirm(
+        "이 사진을 삭제할까요?"
+      );
 
-    /*
-     * 이미 DB에 저장되어 있는 사진
-     */
-    if (
-      photo.existing &&
-      photo.id &&
-      photo.file_path
-    ) {
-      const confirmed =
-        window.confirm(
-          "이 사진을 삭제할까요?"
-        );
+    if (!confirmed) {
+      return;
+    }
 
-      if (!confirmed) return;
-
-      const {
-        error: storageError,
-      } = await supabase.storage
-        .from(STORAGE_BUCKET)
+    const {
+      error: storageError,
+    } =
+      await supabase.storage
+        .from(PHOTO_BUCKET)
         .remove([
           photo.file_path,
         ]);
 
-      if (storageError) {
-        console.error(
-          "Storage 사진 삭제 오류:",
-          storageError
-        );
-      }
+    if (storageError) {
+      alert(
+        "사진 파일 삭제 실패: " +
+          storageError.message
+      );
+      return;
+    }
 
-      const {
-        error: dbError,
-      } = await supabase
+    const { error: dbError } =
+      await supabase
         .from("memory_photos")
         .delete()
         .eq("id", photo.id);
 
-      if (dbError) {
-        alert(
-          "사진 정보 삭제 실패: " +
-            dbError.message
-        );
-        return;
-      }
-
-      setPhotos((current) =>
-        current.filter(
-          (_, i) => i !== index
-        )
+    if (dbError) {
+      alert(
+        "사진 정보 삭제 실패: " +
+          dbError.message
       );
-
-      await loadMemoryPhotos();
       return;
     }
 
-    /*
-     * 아직 DB에 연결되지 않은 새 사진
-     */
-    if (photo.file_path) {
-      await supabase.storage
-        .from(STORAGE_BUCKET)
-        .remove([
-          photo.file_path,
-        ]);
-    }
-
-    setPhotos((current) =>
-      current.filter(
-        (_, i) => i !== index
-      )
-    );
+    await loadPhotos();
   }
 
-  /*
-   * 메모 저장
-   */
   async function saveMemory() {
     if (!selectedPart) {
       alert(
@@ -796,13 +856,8 @@ export default function MemoriesPage() {
     setSaving(true);
 
     try {
-      let memoryId =
-        selectedMemory?.id ||
-        null;
+      let memoryId = "";
 
-      /*
-       * 기존 메모 수정
-       */
       if (selectedMemory) {
         const { error } =
           await supabase
@@ -827,26 +882,26 @@ export default function MemoriesPage() {
           );
           return;
         }
-      }
 
-      /*
-       * 새 메모 생성
-       */
-      else {
+        memoryId =
+          selectedMemory.id;
+      } else {
         const {
           data,
           error,
-        } = await supabase
-          .from("memories")
-          .insert({
-            title: title.trim(),
-            content,
-            part_id:
-              selectedPart.id,
-            created_by: myUserId,
-          })
-          .select()
-          .single();
+        } =
+          await supabase
+            .from("memories")
+            .insert({
+              title: title.trim(),
+              content,
+              part_id:
+                selectedPart.id,
+              created_by:
+                myUserId,
+            })
+            .select()
+            .single();
 
         if (error) {
           alert(
@@ -858,144 +913,86 @@ export default function MemoriesPage() {
 
         if (!data) {
           alert(
-            "메모가 생성되지 않았습니다."
+            "메모 저장 결과를 가져오지 못했습니다."
           );
           return;
         }
 
         memoryId = data.id;
-        setSelectedMemory(data);
       }
 
-      /*
-       * ★ 핵심 ★
-       *
-       * 업로드된 사진을 memory_photos 테이블에
-       * 실제 memory_id와 연결합니다.
-       *
-       * 이 부분이 있어야 "사진은 업로드됐는데
-       * 메모에 첨부가 안 되는 문제"가 해결됩니다.
-       */
-      if (memoryId) {
-        const existingPhotoIds =
-          getMemoryPhotos(
+      // ★ 메모가 확실히 생성/수정된 후 사진 업로드
+      if (
+        pendingPhotos.length >
+        0
+      ) {
+        const photoSuccess =
+          await uploadPhotos(
             memoryId
-          ).map(
-            (photo) => photo.id
           );
 
-        const photosToInsert =
-          photos.filter(
-            (photo) =>
-              !photo.existing &&
-              photo.file_path
-          );
+        if (!photoSuccess) {
+          // 메모 자체는 저장됐지만
+          // 사진 저장 실패를 사용자에게 알림
+          await loadMemories();
+          await loadPhotos();
 
-        if (
-          photosToInsert.length > 0
-        ) {
-          const rows =
-            photosToInsert.map(
-              (photo) => ({
-                memory_id:
-                  memoryId,
-                file_path:
-                  photo.file_path!,
-                file_name:
-                  photo.file_name,
-                created_by:
-                  myUserId,
-              })
+          const savedMemory =
+            memories.find(
+              (memory) =>
+                memory.id ===
+                memoryId
             );
 
-          const {
-            error: photoDbError,
-          } = await supabase
-            .from("memory_photos")
-            .insert(rows);
-
-          if (photoDbError) {
-            console.error(
-              "사진 DB 연결 오류:",
-              photoDbError
-            );
-
-            alert(
-              "메모는 저장되었지만 사진 연결에 실패했습니다.\n" +
-                photoDbError.message
+          if (savedMemory) {
+            setSelectedMemory(
+              savedMemory
             );
           }
+
+          return;
         }
       }
 
-      await loadMemories();
-      await loadMemoryPhotos();
-
-      /*
-       * 저장 후 해당 메모를 다시 찾아서
-       * 읽기 모드로 전환
-       */
-      if (memoryId) {
-        const {
-          data: savedMemory,
-        } = await supabase
-          .from("memories")
-          .select("*")
-          .eq(
-            "id",
-            memoryId
-          )
-          .single();
-
-        if (savedMemory) {
-          setSelectedMemory(
-            savedMemory
-          );
-          setTitle(
-            savedMemory.title
-          );
-          setContent(
-            savedMemory.content
-          );
-
-          const {
-            data: savedPhotos,
-          } =
-            await supabase
-              .from("memory_photos")
-              .select("*")
-              .eq(
-                "memory_id",
-                memoryId
-              )
-              .order(
-                "created_at",
-                {
-                  ascending: true,
-                }
-              );
-
-          setPhotos(
-            (savedPhotos || []).map(
-              (photo) => ({
-                id: photo.id,
-                file_path:
-                  photo.file_path,
-                file_name:
-                  photo.file_name,
-                preview_url:
-                  getPhotoUrl(
-                    photo.file_path
-                  ),
-                existing: true,
-              })
-            )
+      // Object URL 정리
+      pendingPhotos.forEach(
+        (photo) => {
+          URL.revokeObjectURL(
+            photo.previewUrl
           );
         }
+      );
+
+      setPendingPhotos([]);
+
+      await loadMemories();
+      await loadPhotos();
+
+      const { data: savedMemory } =
+        await supabase
+          .from("memories")
+          .select("*")
+          .eq("id", memoryId)
+          .single();
+
+      if (savedMemory) {
+        setSelectedMemory(
+          savedMemory
+        );
+
+        setTitle(
+          savedMemory.title
+        );
+
+        setContent(
+          savedMemory.content
+        );
       }
 
       setIsCreating(false);
       setIsEditing(false);
+
+      alert("저장되었습니다.");
     } finally {
       setSaving(false);
     }
@@ -1006,41 +1003,62 @@ export default function MemoriesPage() {
 
     const confirmed =
       window.confirm(
-        "이 메모를 삭제할까요?\n사진도 함께 삭제됩니다."
+        "이 메모를 삭제할까요?"
       );
 
     if (!confirmed) return;
 
-    const photosToDelete =
+    const memoryPhotos =
       getMemoryPhotos(
         selectedMemory.id
       );
 
-    /*
-     * Storage 사진 삭제
-     */
-    for (const photo of photosToDelete) {
-      await supabase.storage
-        .from(STORAGE_BUCKET)
-        .remove([
-          photo.file_path,
-        ]);
+    if (
+      memoryPhotos.length >
+      0
+    ) {
+      const filePaths =
+        memoryPhotos.map(
+          (photo) =>
+            photo.file_path
+        );
+
+      const {
+        error: storageError,
+      } =
+        await supabase.storage
+          .from(PHOTO_BUCKET)
+          .remove(
+            filePaths
+          );
+
+      if (storageError) {
+        console.error(
+          "사진 파일 삭제 오류:",
+          storageError
+        );
+      }
     }
 
-    /*
-     * 사진 DB 삭제
-     */
-    await supabase
-      .from("memory_photos")
-      .delete()
-      .eq(
-        "memory_id",
-        selectedMemory.id
-      );
+    const {
+      error: photoError,
+    } =
+      await supabase
+        .from("memory_photos")
+        .delete()
+        .eq(
+          "memory_id",
+          selectedMemory.id
+        );
 
-    /*
-     * 메모 삭제
-     */
+    if (photoError) {
+      alert(
+        "사진 정보 삭제 실패: " +
+          photoError.message
+      );
+      return;
+    }
+
     const { error } =
       await supabase
         .from("memories")
@@ -1063,10 +1081,10 @@ export default function MemoriesPage() {
     setIsEditing(false);
     setTitle("");
     setContent("");
-    setPhotos([]);
+    setPendingPhotos([]);
 
     await loadMemories();
-    await loadMemoryPhotos();
+    await loadPhotos();
   }
 
   function formatDate(
@@ -1084,76 +1102,107 @@ export default function MemoriesPage() {
     );
   }
 
-  function renderPhotos(
-    memoryId: string
-  ) {
-    const photos =
-      getMemoryPhotos(memoryId);
+  function PhotoGallery({
+    memoryId,
+  }: {
+    memoryId: string;
+  }) {
+    const memoryPhotos =
+      getMemoryPhotos(
+        memoryId
+      );
 
-    if (photos.length === 0) {
+    if (
+      memoryPhotos.length ===
+      0
+    ) {
       return null;
     }
 
     return (
       <div className="mt-8">
         <div className="mb-3 text-xs font-semibold text-[#8b9fa9]">
-          PHOTOS · {photos.length}
+          PHOTOS ·{" "}
+          {memoryPhotos.length}
         </div>
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {photos.map((photo) => (
-            <a
-              key={photo.id}
-              href={getPhotoUrl(
-                photo.file_path
-              )}
-              target="_blank"
-              rel="noreferrer"
-              className="group overflow-hidden rounded-2xl bg-[#f4f9fb]"
-            >
-              <img
-                src={getPhotoUrl(
-                  photo.file_path
+          {memoryPhotos.map(
+            (photo) => (
+              <div
+                key={photo.id}
+                className="group relative overflow-hidden rounded-2xl bg-[#f1f8fb]"
+              >
+                <img
+                  src={getPhotoUrl(
+                    photo.file_path
+                  )}
+                  alt={
+                    photo.file_name
+                  }
+                  className="aspect-square w-full object-cover"
+                  onError={(
+                    event
+                  ) => {
+                    console.error(
+                      "사진 표시 실패:",
+                      photo.file_path
+                    );
+
+                    event.currentTarget.style.display =
+                      "none";
+                  }}
+                />
+
+                {isEditing && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      deletePhoto(
+                        photo
+                      )
+                    }
+                    className="absolute right-2 top-2 rounded-full bg-black/60 px-2.5 py-1.5 text-xs font-semibold text-white opacity-100 transition hover:bg-red-500"
+                  >
+                    삭제
+                  </button>
                 )}
-                alt={
-                  photo.file_name
-                }
-                className="aspect-square w-full object-cover transition duration-300 group-hover:scale-105"
-              />
-            </a>
-          ))}
+              </div>
+            )
+          )}
         </div>
       </div>
     );
   }
 
-  function renderEditPhotos() {
-    if (photos.length === 0) {
+  function PendingPhotoGallery() {
+    if (
+      pendingPhotos.length ===
+      0
+    ) {
       return null;
     }
 
     return (
-      <div className="mt-7">
+      <div className="mt-6">
         <div className="mb-3 text-xs font-semibold text-[#8b9fa9]">
-          PHOTOS · {photos.length}
+          추가할 사진 ·{" "}
+          {pendingPhotos.length}
         </div>
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {photos.map(
-            (photo, index) => (
+          {pendingPhotos.map(
+            (photo) => (
               <div
-                key={
-                  photo.id ||
-                  `${photo.file_path}-${index}`
-                }
-                className="group relative overflow-hidden rounded-2xl bg-[#f4f9fb]"
+                key={photo.id}
+                className="group relative overflow-hidden rounded-2xl bg-[#f1f8fb]"
               >
                 <img
                   src={
-                    photo.preview_url
+                    photo.previewUrl
                   }
                   alt={
-                    photo.file_name
+                    photo.file.name
                   }
                   className="aspect-square w-full object-cover"
                 />
@@ -1161,13 +1210,13 @@ export default function MemoriesPage() {
                 <button
                   type="button"
                   onClick={() =>
-                    removePhoto(
-                      index
+                    removePendingPhoto(
+                      photo.id
                     )
                   }
-                  className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-black/55 text-lg text-white opacity-100 transition hover:bg-black/70"
+                  className="absolute right-2 top-2 rounded-full bg-black/60 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-red-500"
                 >
-                  ×
+                  삭제
                 </button>
               </div>
             )
@@ -1213,7 +1262,8 @@ export default function MemoriesPage() {
             </h1>
 
             <p className="mt-1 text-sm text-[#8b9fa9]">
-              우리의 이야기를 차곡차곡 기록해요
+              우리의 이야기를 차곡차곡
+              기록해요
             </p>
           </div>
 
@@ -1234,10 +1284,12 @@ export default function MemoriesPage() {
           </div>
         </header>
 
-        {/* PC */}
+        {/* ================= DESKTOP ================= */}
+
         <div className="hidden min-h-[720px] flex-1 overflow-hidden rounded-3xl bg-white/90 shadow-sm md:flex">
 
           {/* PARTS */}
+
           <aside className="w-56 shrink-0 border-r border-[#d4e8f2] bg-[#f7fcff]">
             <div className="flex h-full flex-col">
 
@@ -1249,7 +1301,8 @@ export default function MemoriesPage() {
                     </p>
 
                     <p className="mt-1 text-xs text-[#a3b4bc]">
-                      {parts.length}개의 파트
+                      {parts.length}개의
+                      파트
                     </p>
                   </div>
 
@@ -1273,7 +1326,8 @@ export default function MemoriesPage() {
                     </div>
 
                     <p className="mt-3 text-xs leading-5 text-[#8b9fa9]">
-                      아직 파트가 없어요.
+                      아직 파트가
+                      없어요.
                       <br />
                       파트를 만들어보세요.
                     </p>
@@ -1375,6 +1429,7 @@ export default function MemoriesPage() {
           </aside>
 
           {/* MEMORY LIST */}
+
           <aside className="w-72 shrink-0 border-r border-[#d4e8f2] bg-white">
             <div className="flex h-full flex-col">
 
@@ -1396,9 +1451,7 @@ export default function MemoriesPage() {
                     onClick={
                       createNewMemory
                     }
-                    disabled={
-                      !selectedPart
-                    }
+                    disabled={!selectedPart}
                     className="shrink-0 rounded-xl bg-[#dff2fb] px-3 py-2 text-xs font-semibold text-[#456572] disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     + 메모
@@ -1415,7 +1468,8 @@ export default function MemoriesPage() {
                       </div>
 
                       <p className="mt-3 text-sm text-[#8b9fa9]">
-                        왼쪽에서 파트를
+                        왼쪽에서
+                        파트를
                         <br />
                         선택해주세요.
                       </p>
@@ -1430,7 +1484,8 @@ export default function MemoriesPage() {
                       </div>
 
                       <p className="mt-3 text-sm text-[#8b9fa9]">
-                        아직 메모가 없어요.
+                        아직 메모가
+                        없어요.
                       </p>
 
                       <button
@@ -1490,22 +1545,21 @@ export default function MemoriesPage() {
                                 )}
                               </span>
 
-                              <span className="flex items-center gap-2">
+                              <span>
                                 {photoCount >
                                   0 && (
-                                  <span>
+                                  <>
                                     📷{" "}
                                     {
                                       photoCount
-                                    }
-                                  </span>
+                                    }{" "}
+                                    ·{" "}
+                                  </>
                                 )}
 
-                                <span>
-                                  {formatDate(
-                                    memory.updated_at
-                                  )}
-                                </span>
+                                {formatDate(
+                                  memory.updated_at
+                                )}
                               </span>
                             </div>
                           </button>
@@ -1519,6 +1573,7 @@ export default function MemoriesPage() {
           </aside>
 
           {/* CONTENT */}
+
           <section className="min-w-0 flex-1 bg-white">
             {!selectedPart ? (
               <div className="flex h-full min-h-[650px] items-center justify-center text-center">
@@ -1533,9 +1588,11 @@ export default function MemoriesPage() {
                   </h2>
 
                   <p className="mt-2 text-sm leading-6 text-[#8b9fa9]">
-                    왼쪽에서 파트를 선택하면
+                    왼쪽에서 파트를
+                    선택하면
                     <br />
-                    그 안의 메모를 볼 수 있어요.
+                    그 안의 메모를 볼 수
+                    있어요.
                   </p>
                 </div>
               </div>
@@ -1543,7 +1600,8 @@ export default function MemoriesPage() {
               selectedMemory ? (
               <div className="flex h-full flex-col">
 
-                {/* 상단 */}
+                {/* CONTENT HEADER */}
+
                 <div className="flex items-center justify-between border-b border-[#d4e8f2] px-8 py-4">
                   <div className="flex min-w-0 items-center gap-2 text-xs text-[#8b9fa9]">
                     <span>
@@ -1570,8 +1628,8 @@ export default function MemoriesPage() {
                   <div className="flex items-center gap-2">
 
                     {!isCreating &&
-                      !isEditing &&
-                      selectedMemory && (
+                      selectedMemory &&
+                      !isEditing && (
                         <button
                           onClick={
                             startEditing
@@ -1606,123 +1664,108 @@ export default function MemoriesPage() {
                   </div>
                 </div>
 
-                {/* 보기 모드 */}
-                {!isEditing &&
-                !isCreating &&
-                selectedMemory ? (
-                  <div className="flex-1 overflow-y-auto px-8 py-10 lg:px-14">
+                <div className="flex flex-1 flex-col overflow-y-auto px-8 py-10 lg:px-14">
 
-                    <div className="mb-3 text-xs text-[#9eb0b9]">
-                      {getAuthorName(
-                        selectedMemory.created_by
-                      )}{" "}
-                      ·{" "}
-                      {formatDate(
-                        selectedMemory.updated_at
-                      )}
-                    </div>
-
-                    <h1 className="text-4xl font-bold tracking-tight text-[#3d3532]">
-                      {
-                        selectedMemory.title
-                      }
-                    </h1>
-
-                    <div className="my-7 h-px bg-[#d4e8f2]" />
-
-                    <div className="whitespace-pre-wrap text-[15px] leading-8 text-[#554b47]">
-                      {
-                        selectedMemory.content ||
-                        "내용 없음"
-                      }
-                    </div>
-
-                    {renderPhotos(
-                      selectedMemory.id
-                    )}
-
-                    <div className="mt-10 flex justify-end">
-                      <button
-                        onClick={
-                          startEditing
-                        }
-                        className="rounded-xl bg-[#dff2fb] px-6 py-3 text-sm font-semibold text-[#456572] hover:bg-[#ccebf7]"
-                      >
-                        ✏️ 수정하기
-                      </button>
-                    </div>
+                  <div className="mb-2 text-xs text-[#9eb0b9]">
+                    {selectedMemory
+                      ? `${getAuthorName(
+                          selectedMemory.created_by
+                        )} · ${formatDate(
+                          selectedMemory.updated_at
+                        )}`
+                      : `${myName} · 지금 작성`}
                   </div>
-                ) : (
-                  /* 수정/작성 모드 */
-                  <div className="flex flex-1 flex-col overflow-y-auto px-8 py-10 lg:px-14">
 
-                    <div className="mb-2 text-xs text-[#9eb0b9]">
-                      {selectedMemory
-                        ? `${getAuthorName(
-                            selectedMemory.created_by
-                          )} · ${formatDate(
-                            selectedMemory.updated_at
-                          )}`
-                        : `${myName} · 지금 작성`}
-                    </div>
-
+                  {isEditing ? (
                     <input
-                      autoFocus
-                      value={
-                        title
+                      autoFocus={
+                        isCreating
                       }
+                      value={title}
                       onChange={(e) =>
                         setTitle(
-                          e.target.value
+                          e.target
+                            .value
                         )
                       }
                       placeholder="제목 없음"
                       className="w-full border-0 bg-transparent text-4xl font-bold tracking-tight text-[#3d3532] outline-none placeholder:text-[#d8e4e9]"
                     />
-
-                    <div className="my-7 h-px bg-[#d4e8f2]" />
-
-                    <textarea
-                      value={
-                        content
+                  ) : (
+                    <h1 className="text-4xl font-bold tracking-tight text-[#3d3532]">
+                      {
+                        selectedMemory?.title
                       }
+                    </h1>
+                  )}
+
+                  <div className="my-7 h-px bg-[#d4e8f2]" />
+
+                  {isEditing ? (
+                    <textarea
+                      value={content}
                       onChange={(e) =>
                         setContent(
-                          e.target.value
+                          e.target
+                            .value
                         )
                       }
                       placeholder="기억하고 싶은 이야기를 자유롭게 적어보세요..."
                       className="min-h-[480px] w-full resize-none border-0 bg-transparent text-[15px] leading-8 text-[#554b47] outline-none placeholder:text-[#b7c8cf]"
                     />
+                  ) : (
+                    <div className="min-h-[200px] whitespace-pre-wrap text-[15px] leading-8 text-[#554b47]">
+                      {selectedMemory?.content ||
+                        "내용 없음"}
+                    </div>
+                  )}
 
-                    {renderEditPhotos()}
+                  {/* EXISTING PHOTOS */}
 
-                    <div className="mt-5">
-                      <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-[#bcd9e6] bg-[#f7fcff] px-4 py-3 text-sm font-semibold text-[#587582] hover:bg-[#eaf6fc]">
-                        📷{" "}
-                        {uploadingPhoto
-                          ? "사진 업로드 중..."
-                          : "사진 추가"}
+                  {selectedMemory && (
+                    <PhotoGallery
+                      memoryId={
+                        selectedMemory.id
+                      }
+                    />
+                  )}
+
+                  {/* NEW PHOTOS */}
+
+                  {isEditing && (
+                    <>
+                      <div className="mt-8">
+                        <label
+                          htmlFor="desktop-photo-upload"
+                          className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-[#bcd9e6] bg-[#f7fcff] px-4 py-3 text-sm font-semibold text-[#587582] transition hover:bg-[#eaf6fc]"
+                        >
+                          📷 사진 추가
+                        </label>
 
                         <input
+                          id="desktop-photo-upload"
                           type="file"
                           accept="image/*"
                           multiple
                           onChange={
                             handlePhotoSelect
                           }
-                          disabled={
-                            uploadingPhoto
-                          }
                           className="hidden"
                         />
-                      </label>
 
-                      <p className="mt-2 text-xs text-[#a3b4bc]">
-                        여러 장을 한 번에 선택할 수 있어요.
-                      </p>
-                    </div>
+                        <p className="mt-2 text-xs text-[#a3b4bc]">
+                          사진은 최대
+                          10MB까지
+                          추가할 수
+                          있어요.
+                        </p>
+                      </div>
 
+                      <PendingPhotoGallery />
+                    </>
+                  )}
+
+                  {isEditing && (
                     <div className="mt-8 flex items-center justify-between border-t border-[#d4e8f2] pt-5">
                       <p className="text-xs text-[#9eb0b9]">
                         {
@@ -1736,17 +1779,18 @@ export default function MemoriesPage() {
                         }
                         disabled={
                           saving ||
-                          uploadingPhoto
+                          photoLoading
                         }
                         className="rounded-xl bg-[#dff2fb] px-6 py-3 text-sm font-semibold text-[#456572] transition hover:bg-[#ccebf7] disabled:opacity-50"
                       >
-                        {saving
+                        {saving ||
+                        photoLoading
                           ? "저장 중..."
                           : "저장"}
                       </button>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             ) : (
               <div className="flex h-full min-h-[650px] items-center justify-center text-center">
@@ -1781,7 +1825,8 @@ export default function MemoriesPage() {
           </section>
         </div>
 
-        {/* MOBILE */}
+        {/* ================= MOBILE ================= */}
+
         <div className="md:hidden">
 
           <div className="rounded-2xl bg-white/90 p-4 shadow-sm">
@@ -1861,7 +1906,8 @@ export default function MemoriesPage() {
                         </div>
 
                         <p className="mt-3 text-sm text-[#8b9fa9]">
-                          아직 메모가 없어요.
+                          아직 메모가
+                          없어요.
                         </p>
 
                         <button
@@ -1876,42 +1922,60 @@ export default function MemoriesPage() {
                     ) : (
                       <div className="space-y-2">
                         {selectedPartMemories.map(
-                          (
-                            memory
-                          ) => (
-                            <button
-                              key={
+                          (memory) => {
+                            const photoCount =
+                              getMemoryPhotos(
                                 memory.id
-                              }
-                              onClick={() =>
-                                selectMemory(
-                                  memory
-                                )
-                              }
-                              className="w-full rounded-xl bg-[#f4f9fb] p-4 text-left transition hover:bg-[#eaf6fc]"
-                            >
-                              <p className="font-semibold">
-                                {
-                                  memory.title
+                              ).length;
+
+                            return (
+                              <button
+                                key={
+                                  memory.id
                                 }
-                              </p>
+                                onClick={() =>
+                                  selectMemory(
+                                    memory
+                                  )
+                                }
+                                className="w-full rounded-xl bg-[#f4f9fb] p-4 text-left transition hover:bg-[#eaf6fc]"
+                              >
+                                <p className="font-semibold">
+                                  {
+                                    memory.title
+                                  }
+                                </p>
 
-                              <p className="mt-1 line-clamp-2 text-xs text-[#8b9fa9]">
-                                {memory.content ||
-                                  "내용 없음"}
-                              </p>
+                                <p className="mt-1 line-clamp-2 text-xs text-[#8b9fa9]">
+                                  {memory.content ||
+                                    "내용 없음"}
+                                </p>
 
-                              <p className="mt-2 text-[10px] text-[#9eb0b9]">
-                                {getAuthorName(
-                                  memory.created_by
-                                )}{" "}
-                                ·{" "}
-                                {formatDate(
-                                  memory.updated_at
-                                )}
-                              </p>
-                            </button>
-                          )
+                                <p className="mt-2 text-[10px] text-[#9eb0b9]">
+                                  {getAuthorName(
+                                    memory.created_by
+                                  )}
+
+                                  {" · "}
+
+                                  {photoCount >
+                                    0 && (
+                                    <>
+                                      📷{" "}
+                                      {
+                                        photoCount
+                                      }{" "}
+                                      ·{" "}
+                                    </>
+                                  )}
+
+                                  {formatDate(
+                                    memory.updated_at
+                                  )}
+                                </p>
+                              </button>
+                            );
+                          }
                         )}
                       </div>
                     )}
@@ -1922,30 +1986,30 @@ export default function MemoriesPage() {
                 selectedMemory) && (
                 <div className="mt-3 rounded-2xl bg-white/90 p-5 shadow-sm">
 
-                  {/* 모바일 상단 */}
                   <div className="mb-5 flex items-center justify-between">
-
                     <div>
                       <p className="text-xs text-[#8b9fa9]">
-                        {isCreating
-                          ? "NEW MEMORY"
-                          : isEditing
-                          ? "EDIT MEMORY"
-                          : "MEMORY"}
+                        {selectedMemory &&
+                        !isEditing
+                          ? "MEMORY"
+                          : selectedMemory
+                            ? "EDIT MEMORY"
+                            : "NEW MEMORY"}
                       </p>
 
                       <h2 className="mt-1 text-xl font-bold">
-                        {isCreating
-                          ? "새 메모"
-                          : selectedMemory?.title}
+                        {selectedMemory &&
+                        !isEditing
+                          ? "메모 보기"
+                          : selectedMemory
+                            ? "메모 수정"
+                            : "새 메모"}
                       </h2>
                     </div>
 
                     <div className="flex gap-2">
-
-                      {!isCreating &&
-                        !isEditing &&
-                        selectedMemory && (
+                      {selectedMemory &&
+                        !isEditing && (
                           <button
                             onClick={
                               startEditing
@@ -1969,102 +2033,79 @@ export default function MemoriesPage() {
                     </div>
                   </div>
 
-                  {/* 모바일 읽기 */}
-                  {!isEditing &&
-                  !isCreating &&
-                  selectedMemory ? (
-                    <>
-                      <p className="mb-4 text-xs text-[#9eb0b9]">
-                        {getAuthorName(
-                          selectedMemory.created_by
-                        )}{" "}
-                        ·{" "}
-                        {formatDate(
-                          selectedMemory.updated_at
-                        )}
-                      </p>
-
-                      <h1 className="text-2xl font-bold text-[#3d3532]">
-                        {
-                          selectedMemory.title
-                        }
-                      </h1>
-
-                      <div className="my-5 h-px bg-[#d4e8f2]" />
-
-                      <div className="whitespace-pre-wrap text-sm leading-7 text-[#554b47]">
-                        {
-                          selectedMemory.content ||
-                          "내용 없음"
-                        }
-                      </div>
-
-                      {renderPhotos(
-                        selectedMemory.id
-                      )}
-
-                      <button
-                        onClick={
-                          startEditing
-                        }
-                        className="mt-8 w-full rounded-xl bg-[#dff2fb] py-3 text-sm font-semibold text-[#456572]"
-                      >
-                        ✏️ 수정하기
-                      </button>
-                    </>
+                  {isEditing ? (
+                    <input
+                      autoFocus
+                      value={title}
+                      onChange={(e) =>
+                        setTitle(
+                          e.target
+                            .value
+                        )
+                      }
+                      placeholder="제목을 입력해주세요"
+                      className="w-full border-0 bg-transparent text-2xl font-bold text-[#3d3532] outline-none placeholder:text-[#c7d5db]"
+                    />
                   ) : (
-                    /* 모바일 수정 */
+                    <h1 className="text-2xl font-bold text-[#3d3532]">
+                      {
+                        selectedMemory?.title
+                      }
+                    </h1>
+                  )}
+
+                  <div className="my-4 h-px bg-[#d4e8f2]" />
+
+                  {isEditing ? (
+                    <textarea
+                      value={content}
+                      onChange={(e) =>
+                        setContent(
+                          e.target
+                            .value
+                        )
+                      }
+                      placeholder="기억하고 싶은 이야기를 자유롭게 적어보세요..."
+                      className="min-h-[300px] w-full resize-none border-0 bg-transparent text-sm leading-7 text-[#554b47] outline-none placeholder:text-[#b7c8cf]"
+                    />
+                  ) : (
+                    <div className="min-h-[150px] whitespace-pre-wrap text-sm leading-7 text-[#554b47]">
+                      {selectedMemory?.content ||
+                        "내용 없음"}
+                    </div>
+                  )}
+
+                  {selectedMemory && (
+                    <PhotoGallery
+                      memoryId={
+                        selectedMemory.id
+                      }
+                    />
+                  )}
+
+                  {isEditing && (
                     <>
-                      <input
-                        autoFocus
-                        value={
-                          title
-                        }
-                        onChange={(e) =>
-                          setTitle(
-                            e.target.value
-                          )
-                        }
-                        placeholder="제목을 입력해주세요"
-                        className="w-full border-0 bg-transparent text-2xl font-bold text-[#3d3532] outline-none placeholder:text-[#c7d5db]"
-                      />
-
-                      <div className="my-4 h-px bg-[#d4e8f2]" />
-
-                      <textarea
-                        value={
-                          content
-                        }
-                        onChange={(e) =>
-                          setContent(
-                            e.target.value
-                          )
-                        }
-                        placeholder="기억하고 싶은 이야기를 자유롭게 적어보세요..."
-                        className="min-h-[300px] w-full resize-none border-0 bg-transparent text-sm leading-7 text-[#554b47] outline-none placeholder:text-[#b7c8cf]"
-                      />
-
-                      {renderEditPhotos()}
-
-                      <label className="mt-5 inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[#bcd9e6] bg-[#f7fcff] py-3 text-sm font-semibold text-[#587582]">
-                        📷{" "}
-                        {uploadingPhoto
-                          ? "사진 업로드 중..."
-                          : "사진 추가"}
+                      <div className="mt-6">
+                        <label
+                          htmlFor="mobile-photo-upload"
+                          className="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[#bcd9e6] bg-[#f7fcff] px-4 py-3 text-sm font-semibold text-[#587582]"
+                        >
+                          📷 사진 추가
+                        </label>
 
                         <input
+                          id="mobile-photo-upload"
                           type="file"
                           accept="image/*"
                           multiple
                           onChange={
                             handlePhotoSelect
                           }
-                          disabled={
-                            uploadingPhoto
-                          }
                           className="hidden"
                         />
-                      </label>
+                      </div>
+
+                      <PendingPhotoGallery />
 
                       <div className="mt-5 flex gap-2 border-t border-[#d4e8f2] pt-5">
 
@@ -2083,11 +2124,12 @@ export default function MemoriesPage() {
                           }
                           disabled={
                             saving ||
-                            uploadingPhoto
+                            photoLoading
                           }
                           className="flex-1 rounded-xl bg-[#dff2fb] py-3 text-sm font-semibold text-[#456572] disabled:opacity-50"
                         >
-                          {saving
+                          {saving ||
+                          photoLoading
                             ? "저장 중..."
                             : "저장"}
                         </button>
@@ -2101,14 +2143,13 @@ export default function MemoriesPage() {
         </div>
       </div>
 
-      {/* PART MODAL */}
+      {/* ================= PART MODAL ================= */}
+
       {showPartModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-5"
           onClick={() =>
-            setShowPartModal(
-              false
-            )
+            setShowPartModal(false)
           }
         >
           <div
@@ -2147,9 +2188,7 @@ export default function MemoriesPage() {
 
             <input
               autoFocus
-              value={
-                partName
-              }
+              value={partName}
               onChange={(e) =>
                 setPartName(
                   e.target.value
@@ -2208,3 +2247,4 @@ export default function MemoriesPage() {
     </main>
   );
 }
+```
