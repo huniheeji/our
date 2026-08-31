@@ -50,6 +50,11 @@ const HEEJI_ID = "92dac467-922d-4ef4-b353-eb84593d9761";
 
 const PHOTO_BUCKET = "memory-photos";
 
+/* =========================================================
+   댓글 입력창
+   부모 컴포넌트 밖에 유지
+   ========================================================= */
+
 function CommentInput({
   value,
   onChange,
@@ -63,7 +68,7 @@ function CommentInput({
 }) {
   return (
     <div className="mt-7">
-      <div className="rounded-2xl border border-[#edf2f4] bg-[#fafcfd] p-2">
+      <div className="flex items-end gap-2 rounded-2xl border border-[#e4eef2] bg-[#fafcfd] p-2">
         <textarea
           value={value}
           onChange={(event) => {
@@ -80,25 +85,167 @@ function CommentInput({
             }
           }}
           placeholder="마음을 남겨보세요..."
-          rows={2}
-          className="min-h-[58px] w-full resize-none border-0 bg-transparent px-3 py-2 text-sm leading-6 text-[#554b47] outline-none placeholder:text-[#c0cdd2]"
+          rows={1}
+          className="min-h-[42px] flex-1 resize-none border-0 bg-transparent px-3 py-2 text-sm leading-6 text-[#554b47] outline-none placeholder:text-[#b9c6cb]"
         />
 
-        <div className="flex justify-end px-1 pb-1">
-          <button
-            type="button"
-            onClick={onSubmit}
-            disabled={saving || !value.trim()}
-            className="rounded-xl bg-[#e9f6fb] px-4 py-2 text-xs font-semibold text-[#66818d] transition hover:bg-[#dff2f8] disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {saving ? "..." : "남기기"}
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={onSubmit}
+          disabled={saving || !value.trim()}
+          className="shrink-0 rounded-xl bg-[#e9f6fb] px-4 py-2.5 text-xs font-semibold text-[#587582] transition hover:bg-[#dceff6] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {saving ? "..." : "남기기"}
+        </button>
       </div>
 
-      <p className="mt-2 text-center text-[10px] text-[#b8c5ca]">
+      <p className="mt-2 text-center text-[10px] text-[#b1bec4]">
         Enter로 등록 · Shift + Enter로 줄바꿈
       </p>
+    </div>
+  );
+}
+
+/* =========================================================
+   댓글 영역
+   중요:
+   MemoriesPage 밖에 둡니다.
+   부모 렌더링 시 컴포넌트가 재생성되지 않아서
+   한글 입력 중 포커스/IME가 끊기지 않습니다.
+   ========================================================= */
+
+function CommentsSection({
+  memoryComments,
+  myUserId,
+  commentText,
+  commentSaving,
+  onCommentChange,
+  onSubmit,
+  onDelete,
+  getAuthorName,
+  formatDate,
+}: {
+  memoryComments: MemoryComment[];
+  myUserId: string;
+  commentText: string;
+  commentSaving: boolean;
+  onCommentChange: (value: string) => void;
+  onSubmit: () => void;
+  onDelete: (comment: MemoryComment) => void;
+  getAuthorName: (userId: string | null) => string;
+  formatDate: (dateString: string) => string;
+}) {
+  return (
+    <div className="mt-12 border-t border-[#edf2f4] pt-9">
+      {/* TITLE */}
+
+      <div className="text-center">
+        <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-full bg-[#f3f9fb] text-base">
+          💬
+        </div>
+
+        <p className="mt-3 text-xs font-semibold tracking-[0.12em] text-[#9aafb8]">
+          OUR STORY
+        </p>
+      </div>
+
+      {/* EMPTY */}
+
+      {memoryComments.length === 0 ? (
+        <div className="py-8 text-center">
+          <p className="text-sm font-medium text-[#899da6]">
+            아직 댓글이 없어요
+            <span className="ml-1 text-[#d8aeb8]">
+              ♡
+            </span>
+          </p>
+
+          <p className="mt-1.5 text-xs text-[#b6c3c8]">
+            이 기억에 첫 번째 마음을 남겨보세요
+          </p>
+        </div>
+      ) : (
+        /* COMMENT LIST */
+
+        <div className="mt-7 space-y-5">
+          {memoryComments.map((comment) => {
+            const isMine =
+              comment.created_by === myUserId;
+
+            return (
+              <div
+                key={comment.id}
+                className={`flex ${
+                  isMine
+                    ? "justify-end"
+                    : "justify-start"
+                }`}
+              >
+                <div
+                  className={`max-w-[88%] ${
+                    isMine
+                      ? "text-right"
+                      : "text-left"
+                  }`}
+                >
+                  <div
+                    className={`mb-1.5 flex items-center gap-2 ${
+                      isMine
+                        ? "justify-end"
+                        : "justify-start"
+                    }`}
+                  >
+                    <span className="text-[11px] font-semibold text-[#718c98]">
+                      {getAuthorName(
+                        comment.created_by
+                      )}
+                    </span>
+
+                    <span className="text-[10px] text-[#b7c3c8]">
+                      {formatDate(
+                        comment.created_at
+                      )}
+                    </span>
+
+                    {isMine && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onDelete(comment)
+                        }
+                        className="text-[10px] text-[#c2b5b1] transition hover:text-red-400"
+                      >
+                        삭제
+                      </button>
+                    )}
+                  </div>
+
+                  <div
+                    className={`inline-block rounded-2xl px-4 py-3 ${
+                      isMine
+                        ? "rounded-tr-md bg-[#e9f6fb]"
+                        : "rounded-tl-md bg-[#f7f7f6]"
+                    }`}
+                  >
+                    <p className="whitespace-pre-wrap text-sm leading-6 text-[#554b47]">
+                      {comment.content}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* INPUT */}
+
+      <CommentInput
+        value={commentText}
+        onChange={onCommentChange}
+        onSubmit={onSubmit}
+        saving={commentSaving}
+      />
     </div>
   );
 }
@@ -108,7 +255,9 @@ export default function MemoriesPage() {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [photos, setPhotos] = useState<MemoryPhoto[]>([]);
   const [comments, setComments] = useState<MemoryComment[]>([]);
-  const [pendingPhotos, setPendingPhotos] = useState<PendingPhoto[]>([]);
+  const [pendingPhotos, setPendingPhotos] = useState<
+    PendingPhoto[]
+  >([]);
 
   const [selectedPart, setSelectedPart] =
     useState<MemoryPart | null>(null);
@@ -119,8 +268,10 @@ export default function MemoriesPage() {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
 
-  const [commentText, setCommentText] = useState("");
-  const [commentSaving, setCommentSaving] = useState(false);
+  const [commentText, setCommentText] =
+    useState("");
+  const [commentSaving, setCommentSaving] =
+    useState(false);
 
   const [partName, setPartName] = useState("");
   const [editingPart, setEditingPart] =
@@ -244,6 +395,10 @@ export default function MemoriesPage() {
     };
   }, []);
 
+  /* =========================================================
+     DATA
+  ========================================================= */
+
   async function loadData() {
     await Promise.all([
       loadParts(),
@@ -333,7 +488,18 @@ export default function MemoriesPage() {
       });
 
     if (error) {
-      console.error("MEMORY PHOTOS 조회 실패:", error);
+      console.error(
+        "========== MEMORY PHOTOS 조회 실패 =========="
+      );
+      console.error("error:", error);
+      console.error("message:", error.message);
+      console.error("details:", error.details);
+      console.error("hint:", error.hint);
+      console.error("code:", error.code);
+      console.error(
+        "=============================================="
+      );
+
       return;
     }
 
@@ -356,7 +522,13 @@ export default function MemoriesPage() {
     setComments(data || []);
   }
 
-  function getAuthorName(userId: string | null) {
+  /* =========================================================
+     AUTHOR
+  ========================================================= */
+
+  function getAuthorName(
+    userId: string | null
+  ) {
     if (userId === YOUNGHUN_ID) {
       return "영훈";
     }
@@ -367,6 +539,10 @@ export default function MemoriesPage() {
 
     return "우리";
   }
+
+  /* =========================================================
+     MEMORY / PART
+  ========================================================= */
 
   function getPartMemories(partId: string) {
     return memories
@@ -395,6 +571,10 @@ export default function MemoriesPage() {
     );
   }
 
+  /* =========================================================
+     PHOTO
+  ========================================================= */
+
   function getPhotoUrl(filePath: string) {
     const { data } =
       supabase.storage
@@ -403,6 +583,10 @@ export default function MemoriesPage() {
 
     return data.publicUrl;
   }
+
+  /* =========================================================
+     SELECT
+  ========================================================= */
 
   function selectPart(part: MemoryPart) {
     setSelectedPart(part);
@@ -417,8 +601,10 @@ export default function MemoriesPage() {
 
   function selectMemory(memory: Memory) {
     setSelectedMemory(memory);
+
     setIsCreating(false);
     setIsEditing(false);
+
     setTitle(memory.title);
     setContent(memory.content);
     setCommentText("");
@@ -436,6 +622,7 @@ export default function MemoriesPage() {
     setSelectedMemory(null);
     setIsCreating(true);
     setIsEditing(true);
+
     setTitle("");
     setContent("");
     setCommentText("");
@@ -454,6 +641,7 @@ export default function MemoriesPage() {
   function cancelMemory() {
     setIsCreating(false);
     setIsEditing(false);
+
     setPendingPhotos([]);
 
     if (selectedMemory) {
@@ -466,13 +654,19 @@ export default function MemoriesPage() {
     }
   }
 
+  /* =========================================================
+     PART MODAL
+  ========================================================= */
+
   function openNewPartModal() {
     setEditingPart(null);
     setPartName("");
     setShowPartModal(true);
   }
 
-  function openEditPartModal(part: MemoryPart) {
+  function openEditPartModal(
+    part: MemoryPart
+  ) {
     setEditingPart(part);
     setPartName(part.name);
     setShowPartModal(true);
@@ -660,6 +854,10 @@ export default function MemoriesPage() {
     await loadData();
   }
 
+  /* =========================================================
+     PHOTO SELECT
+  ========================================================= */
+
   function handlePhotoSelect(
     event: React.ChangeEvent<HTMLInputElement>
   ) {
@@ -749,6 +947,10 @@ export default function MemoriesPage() {
       }
     );
   }
+
+  /* =========================================================
+     UPLOAD PHOTOS
+  ========================================================= */
 
   async function uploadPhotos(
     memoryId: string
@@ -896,6 +1098,10 @@ export default function MemoriesPage() {
     }
   }
 
+  /* =========================================================
+     DELETE PHOTO
+  ========================================================= */
+
   async function deletePhoto(
     photo: MemoryPhoto
   ) {
@@ -943,6 +1149,10 @@ export default function MemoriesPage() {
 
     await loadPhotos();
   }
+
+  /* =========================================================
+     SAVE MEMORY
+  ========================================================= */
 
   async function saveMemory() {
     if (!selectedPart) {
@@ -1084,6 +1294,10 @@ export default function MemoriesPage() {
     }
   }
 
+  /* =========================================================
+     DELETE MEMORY
+  ========================================================= */
+
   async function deleteMemory() {
     if (!selectedMemory) return;
 
@@ -1194,6 +1408,10 @@ export default function MemoriesPage() {
     await loadComments();
   }
 
+  /* =========================================================
+     COMMENTS
+  ========================================================= */
+
   async function saveComment() {
     if (!selectedMemory) return;
 
@@ -1279,6 +1497,10 @@ export default function MemoriesPage() {
     await loadComments();
   }
 
+  /* =========================================================
+     DATE
+  ========================================================= */
+
   function formatDate(
     dateString: string
   ) {
@@ -1293,6 +1515,10 @@ export default function MemoriesPage() {
       }
     );
   }
+
+  /* =========================================================
+     PHOTO GALLERY
+  ========================================================= */
 
   function PhotoGallery({
     memoryId,
@@ -1367,6 +1593,10 @@ export default function MemoriesPage() {
     );
   }
 
+  /* =========================================================
+     PENDING PHOTOS
+  ========================================================= */
+
   function PendingPhotoGallery() {
     if (
       pendingPhotos.length ===
@@ -1418,135 +1648,9 @@ export default function MemoriesPage() {
     );
   }
 
-  function CommentsSection({
-    memoryId,
-  }: {
-    memoryId: string;
-  }) {
-    const memoryComments =
-      getMemoryComments(memoryId);
-
-    return (
-      <div className="mt-12 border-t border-[#edf2f4] pt-9">
-
-        {/* TITLE */}
-
-        <div className="text-center">
-          <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-full bg-[#f3f9fb] text-base">
-            💬
-          </div>
-
-          <p className="mt-3 text-xs font-semibold tracking-[0.12em] text-[#9aafb8]">
-            OUR STORY
-          </p>
-        </div>
-
-        {/* EMPTY */}
-
-        {memoryComments.length === 0 ? (
-          <div className="py-8 text-center">
-            <p className="text-sm font-medium text-[#899da6]">
-              아직 댓글이 없어요
-              <span className="ml-1 text-[#d8aeb8]">
-                ♡
-              </span>
-            </p>
-
-            <p className="mt-1.5 text-xs text-[#b6c3c8]">
-              이 기억에 첫 번째 마음을 남겨보세요
-            </p>
-          </div>
-        ) : (
-
-          /* COMMENT LIST */
-
-          <div className="mt-7 space-y-5">
-            {memoryComments.map((comment) => {
-              const isMine =
-                comment.created_by ===
-                myUserId;
-
-              return (
-                <div
-                  key={comment.id}
-                  className={`flex ${
-                    isMine
-                      ? "justify-end"
-                      : "justify-start"
-                  }`}
-                >
-                  <div
-                    className={`max-w-[88%] ${
-                      isMine
-                        ? "text-right"
-                        : "text-left"
-                    }`}
-                  >
-                    <div
-                      className={`mb-1.5 flex items-center gap-2 ${
-                        isMine
-                          ? "justify-end"
-                          : "justify-start"
-                      }`}
-                    >
-                      <span className="text-[11px] font-semibold text-[#718c98]">
-                        {getAuthorName(
-                          comment.created_by
-                        )}
-                      </span>
-
-                      <span className="text-[10px] text-[#b7c3c8]">
-                        {formatDate(
-                          comment.created_at
-                        )}
-                      </span>
-
-                      {isMine && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            deleteComment(
-                              comment
-                            )
-                          }
-                          className="text-[10px] text-[#c2b5b1] transition hover:text-red-400"
-                        >
-                          삭제
-                        </button>
-                      )}
-                    </div>
-
-                    <div
-                      className={`inline-block rounded-2xl px-4 py-3 ${
-                        isMine
-                          ? "rounded-tr-md bg-[#e9f6fb]"
-                          : "rounded-tl-md bg-[#f7f7f6]"
-                      }`}
-                    >
-                      <p className="whitespace-pre-wrap text-sm leading-6 text-[#554b47]">
-                        {
-                          comment.content
-                        }
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* INPUT */}
-
-        <CommentInput
-          value={commentText}
-          onChange={setCommentText}
-          onSubmit={saveComment}
-          saving={commentSaving}
-        />
-      </div>
-    );
-  }
+  /* =========================================================
+     LOADING
+  ========================================================= */
 
   if (loading) {
     return (
@@ -1562,6 +1666,17 @@ export default function MemoriesPage() {
           selectedPart.id
         )
       : [];
+
+  const selectedMemoryComments =
+    selectedMemory
+      ? getMemoryComments(
+          selectedMemory.id
+        )
+      : [];
+
+  /* =========================================================
+     PAGE
+  ========================================================= */
 
   return (
     <main className="min-h-screen bg-[#eaf6fc] text-[#3d3532]">
@@ -1616,7 +1731,6 @@ export default function MemoriesPage() {
 
           <aside className="w-56 shrink-0 border-r border-[#d4e8f2] bg-[#f7fcff]">
             <div className="flex h-full flex-col">
-
               <div className="border-b border-[#d4e8f2] px-5 py-5">
                 <div className="flex items-center justify-between">
                   <div>
@@ -1756,7 +1870,6 @@ export default function MemoriesPage() {
 
           <aside className="w-72 shrink-0 border-r border-[#d4e8f2] bg-white">
             <div className="flex h-full flex-col">
-
               <div className="border-b border-[#d4e8f2] px-5 py-5">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
@@ -1964,7 +2077,6 @@ export default function MemoriesPage() {
                   </div>
 
                   <div className="flex items-center gap-2">
-
                     {!isCreating &&
                       selectedMemory &&
                       !isEditing && (
@@ -2099,10 +2211,36 @@ export default function MemoriesPage() {
                     </>
                   )}
 
+                  {/* COMMENTS */}
+
                   {selectedMemory && (
                     <CommentsSection
-                      memoryId={
-                        selectedMemory.id
+                      memoryComments={
+                        selectedMemoryComments
+                      }
+                      myUserId={
+                        myUserId
+                      }
+                      commentText={
+                        commentText
+                      }
+                      commentSaving={
+                        commentSaving
+                      }
+                      onCommentChange={
+                        setCommentText
+                      }
+                      onSubmit={
+                        saveComment
+                      }
+                      onDelete={
+                        deleteComment
+                      }
+                      getAuthorName={
+                        getAuthorName
+                      }
+                      formatDate={
+                        formatDate
                       }
                     />
                   )}
@@ -2467,10 +2605,36 @@ export default function MemoriesPage() {
                     </>
                   )}
 
+                  {/* MOBILE COMMENTS */}
+
                   {selectedMemory && (
                     <CommentsSection
-                      memoryId={
-                        selectedMemory.id
+                      memoryComments={
+                        selectedMemoryComments
+                      }
+                      myUserId={
+                        myUserId
+                      }
+                      commentText={
+                        commentText
+                      }
+                      commentSaving={
+                        commentSaving
+                      }
+                      onCommentChange={
+                        setCommentText
+                      }
+                      onSubmit={
+                        saveComment
+                      }
+                      onDelete={
+                        deleteComment
+                      }
+                      getAuthorName={
+                        getAuthorName
+                      }
+                      formatDate={
+                        formatDate
                       }
                     />
                   )}
